@@ -590,10 +590,7 @@ export function getTermIssues(
       });
     }
 
-    const hasConfirmedRole = assignments.some(
-      (item) => item.decision === 'confirmed',
-    );
-    if (hasConfirmedRole && !term.training[memberId]) {
+    if (!term.training[memberId]) {
       issues.push({
         id: `training-${memberId}`,
         kind: 'training',

@@ -27,7 +27,7 @@ test('示範資料可一致計算職位、核心缺額與問題', () => {
   assert.equal(metrics.assignedPeople, 22);
   assert.equal(metrics.positions, 23);
   assert.equal(metrics.coreGaps, 0);
-  assert.equal(metrics.issueCount, 13);
+  assert.equal(metrics.issueCount, 16);
 });
 
 test('下層組員不限人數，核心職務仍維持單一席次', () => {
@@ -67,6 +67,18 @@ test('同一會員多職位只產生一筆兼任與一筆培訓問題', () => {
     ).length,
     1,
   );
+});
+
+test('暫定或提名中的組員未報名培訓也會列入問題', () => {
+  const workspace = createDemoWorkspace();
+  const term = getActiveTerm(workspace);
+  const trainingMemberIds = getTermIssues(workspace, term)
+    .filter((issue) => issue.kind === 'training')
+    .map((issue) => issue.memberId);
+
+  assert.equal(trainingMemberIds.includes('demo-011'), true);
+  assert.equal(trainingMemberIds.includes('demo-015'), true);
+  assert.equal(trainingMemberIds.includes('demo-018'), true);
 });
 
 test('續約門檻包含門檻當日', () => {
