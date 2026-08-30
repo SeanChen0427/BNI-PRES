@@ -14,6 +14,7 @@ import {
   LayoutDashboard,
   Loader2,
   LogIn,
+  LogOut,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -78,6 +79,7 @@ import {
   hasOfficialSourceSession,
   loadOfficialWorkspace,
   loginAndLoadOfficialSource,
+  logoutOfficialSource,
   restoreAndLoadOfficialSource,
   saveOfficialWorkspace,
   type OfficialSourceResult,
@@ -481,10 +483,10 @@ function LeadershipWorkspace() {
   const [draftRenewalThreshold, setDraftRenewalThreshold] = useState('');
   const [draftTrainingDate, setDraftTrainingDate] = useState('');
   const [sourceOpen, setSourceOpen] = useState(false);
-  const [sourceAccount, setSourceAccount] = useState('vice');
   const [sourcePassword, setSourcePassword] = useState('');
   const [sourceLoading, setSourceLoading] = useState(false);
   const [sourceError, setSourceError] = useState('');
+  const [sourceAuthenticated, setSourceAuthenticated] = useState(false);
   const [cloudSyncStatus, setCloudSyncStatus] =
     useState<CloudSyncStatus>('idle');
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -520,6 +522,7 @@ function LeadershipWorkspace() {
     if (!hydrated || sourceRestoreStarted.current) return;
     sourceRestoreStarted.current = true;
     if (!hasOfficialSourceSession()) {
+      setSourceAuthenticated(false);
       setSourceOpen(true);
       return;
     }
@@ -528,10 +531,12 @@ function LeadershipWorkspace() {
     void restoreAndLoadOfficialSource()
       .then(async (result) => {
         if (!result) {
+          setSourceAuthenticated(false);
           setSourceOpen(true);
           return;
         }
         await acceptOfficialSource(result, '正式姓名與會籍已載入', true);
+        setSourceAuthenticated(true);
       })
       .catch((error: unknown) => {
         setSourceError(
@@ -621,11 +626,9 @@ function LeadershipWorkspace() {
     setSourceLoading(true);
     setSourceError('');
     try {
-      const result = await loginAndLoadOfficialSource(
-        sourceAccount,
-        sourcePassword,
-      );
+      const result = await loginAndLoadOfficialSource('vice', sourcePassword);
       await acceptOfficialSource(result, '正式姓名與會籍已載入', true);
+      setSourceAuthenticated(true);
       setSourcePassword('');
       setSourceOpen(false);
     } catch (error) {
@@ -643,6 +646,7 @@ function LeadershipWorkspace() {
     try {
       const result = await restoreAndLoadOfficialSource();
       if (!result) {
+        setSourceAuthenticated(false);
         setSourceOpen(true);
         return;
       }
@@ -653,6 +657,27 @@ function LeadershipWorkspace() {
       );
       setSourceOpen(true);
     } finally {
+      setSourceLoading(false);
+    }
+  }
+
+  async function disconnectOfficialSource() {
+    setSourceLoading(true);
+    cloudReady.current = false;
+    cloudSaveSequence.current += 1;
+    try {
+      await logoutOfficialSource();
+    } finally {
+      const demoWorkspace = createDemoWorkspace();
+      workspaceRef.current = demoWorkspace;
+      setWorkspace(demoWorkspace);
+      setHistory([]);
+      setCloudSyncStatus('idle');
+      setSourceAuthenticated(false);
+      setSourcePassword('');
+      setSourceError('');
+      setSettingsOpen(false);
+      setSourceOpen(true);
       setSourceLoading(false);
     }
   }
@@ -1066,12 +1091,12 @@ function LeadershipWorkspace() {
                 ) : (
                   <Sparkles className="size-3.5" />
                 )}
-                {isOfficial ? '正式唯讀資料' : '虛構資料模式'}
+                {isOfficial ? '共同工作台已連線' : '工作台尚未登入'}
               </div>
               <p className="mt-2 text-xs leading-5 text-sidebar-foreground/60">
                 {isOfficial
-                  ? `會員主檔 ${workspace.sourceMeta?.memberCount ?? workspace.members.length} 位；會籍資料只在登入期間讀取。`
-                  : `Demo adapter，共 ${workspace.members.length} 位測試會員。`}
+                  ? `會員主檔 ${workspace.sourceMeta?.memberCount ?? workspace.members.length} 位；所有裝置共用同一份 D1 進度。`
+                  : '輸入共用密碼後，會自動載入正式名單與雲端進度。'}
               </p>
               <button
                 type="button"
@@ -1089,7 +1114,7 @@ function LeadershipWorkspace() {
                 ) : (
                   <LogIn className="size-3" />
                 )}
-                {isOfficial ? '重新讀取' : '載入正式資料'}
+                {isOfficial ? '更新會員資料' : '登入共同工作台'}
               </button>
             </div>
             <button
@@ -1377,7 +1402,7 @@ function LeadershipWorkspace() {
                         <p className="mt-1.5 text-[10px] leading-4 text-primary-foreground/55">
                           {isOfficial
                             ? `本次載入 ${workspace.sourceMeta?.memberCount ?? workspace.members.length} 位；姓名與會籍不寫入 Git 或本機備份。`
-                            : '使用版本化虛構資料；可由上方載入正式來源。'}
+                            : '工作台尚未登入；輸入共用密碼後會自動載入。'}
                         </p>
                       </div>
                     </section>
@@ -1582,33 +1607,31 @@ function LeadershipWorkspace() {
           </div>
         </section>
 
-        <Dialog open={sourceOpen} onOpenChange={setSourceOpen}>
-          <DialogContent className="sm:max-w-md">
+        <Dialog
+          open={sourceOpen}
+          onOpenChange={(open) => {
+            if (!open && !sourceAuthenticated) return;
+            setSourceOpen(open);
+          }}
+        >
+          <DialogContent
+            className="sm:max-w-md"
+            showCloseButton={sourceAuthenticated}
+          >
             <DialogHeader>
-              <DialogTitle>載入正式姓名與會籍</DialogTitle>
+              <DialogTitle>進入富聯領導團隊工作台</DialogTitle>
               <DialogDescription>
-                使用既有副主席系統共用帳密登入。只會唯讀現任會員主檔與已發布快照，密碼不保存。
+                所有手機與電腦使用同一組共用密碼。登入後會自動載入正式會員資料與同一份雲端進度。
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-3">
-              <label className="grid gap-1.5 text-xs font-bold">
-                既有共用帳號
+              <label
+                htmlFor="workspace-shared-password"
+                className="grid gap-1.5 text-xs font-bold"
+              >
+                共用密碼
                 <Input
-                  type="text"
-                  autoComplete="username"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  value={sourceAccount}
-                  onChange={(event) => setSourceAccount(event.target.value)}
-                  placeholder="例如 vice"
-                />
-                <span className="font-normal text-muted-foreground">
-                  可使用 admin、vice 或 Fulian，不需輸入內部 Email。
-                </span>
-              </label>
-              <label className="grid gap-1.5 text-xs font-bold">
-                密碼
-                <Input
+                  id="workspace-shared-password"
                   type="password"
                   autoComplete="current-password"
                   value={sourcePassword}
@@ -1618,8 +1641,11 @@ function LeadershipWorkspace() {
                       void connectOfficialSource();
                     }
                   }}
-                  placeholder="輸入現有共用密碼"
+                  placeholder="輸入共用密碼"
                 />
+                <span className="font-normal text-muted-foreground">
+                  不需要帳號；密碼本身不會保存在工作台。
+                </span>
               </label>
               {sourceError ? (
                 <div className="rounded-xl bg-rose-50 px-3 py-2.5 text-xs font-bold text-rose-800">
@@ -1628,13 +1654,9 @@ function LeadershipWorkspace() {
               ) : null}
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setSourceOpen(false)}>
-                稍後再載入
-              </Button>
               <Button
-                disabled={
-                  sourceLoading || !sourceAccount.trim() || !sourcePassword
-                }
+                className="w-full sm:w-auto"
+                disabled={sourceLoading || !sourcePassword}
                 onClick={() => void connectOfficialSource()}
               >
                 {sourceLoading ? (
@@ -1642,7 +1664,7 @@ function LeadershipWorkspace() {
                 ) : (
                   <LogIn data-icon="inline-start" />
                 )}
-                讀取正式資料
+                進入共同工作台
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -2001,8 +2023,8 @@ function LeadershipWorkspace() {
                   </div>
                 ) : (
                   <p className="mt-3 text-[11px] leading-5 text-amber-950/75">
-                    登入既有副主席系統後，會讀取 Supabase
-                    正式姓名與會籍；密碼不會保存。
+                    輸入共同工作台密碼後，會自動讀取 Supabase 正式姓名、會籍與
+                    D1 共用進度；密碼不會保存。
                   </p>
                 )}
 
@@ -2037,7 +2059,7 @@ function LeadershipWorkspace() {
                   ) : (
                     <LogIn data-icon="inline-start" />
                   )}
-                  {isOfficial ? '重新讀取' : '載入正式資料'}
+                  {isOfficial ? '更新會員資料' : '登入共同工作台'}
                 </Button>
               </section>
 
@@ -2092,8 +2114,20 @@ function LeadershipWorkspace() {
               >
                 {isOfficial
                   ? `${cloudSyncLabel(cloudSyncStatus)}・編組、設定與追蹤儲存在 BNI-PRES 獨立 Cloudflare D1；委員會 Supabase 只讀。`
-                  : '登入正式來源後，手機與電腦會透過 BNI-PRES D1 同步。'}
+                  : '進入共同工作台後，手機與電腦會透過 BNI-PRES D1 同步。'}
               </p>
+
+              {sourceAuthenticated ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={sourceLoading}
+                  onClick={() => void disconnectOfficialSource()}
+                >
+                  <LogOut data-icon="inline-start" />
+                  登出共同工作台
+                </Button>
+              ) : null}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setSettingsOpen(false)}>

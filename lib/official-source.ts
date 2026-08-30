@@ -8,8 +8,12 @@ import {
   resolveSourceAccountEmail,
   sourceResponseErrorMessage,
 } from './source-auth';
-
-const SOURCE_SESSION_KEY = 'fulian.leadership-team.official-source.v1';
+import {
+  clearSourceSession,
+  readSourceSession,
+  saveSourceSession,
+  type SourceSession,
+} from './source-session';
 const WORKSPACE_API_URL = String(
   import.meta.env.VITE_WORKSPACE_API_URL ||
     'https://bni-pres-api.seanchen0427.workers.dev',
@@ -19,12 +23,6 @@ const SOURCE_CONFIG = Object.freeze({
   url: 'https://fahrblkukuhgveiptufn.supabase.co',
   publishableKey: 'sb_publishable_f5U5bDJjXjvRxYSzh7zqGQ__lF-jwPZ',
 });
-
-type SourceSession = {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: number;
-};
 
 type AuthToken = {
   access_token: string;
@@ -100,18 +98,11 @@ async function sourceJson<T>(
 }
 
 function saveSession(session: SourceSession) {
-  window.sessionStorage.setItem(SOURCE_SESSION_KEY, JSON.stringify(session));
+  saveSourceSession(session);
 }
 
 function readSession(): SourceSession | null {
-  try {
-    const session = JSON.parse(
-      window.sessionStorage.getItem(SOURCE_SESSION_KEY) || 'null',
-    ) as SourceSession | null;
-    return session?.accessToken && session.refreshToken ? session : null;
-  } catch {
-    return null;
-  }
+  return readSourceSession();
 }
 
 export function hasOfficialSourceSession(): boolean {
@@ -146,7 +137,7 @@ async function currentSession(): Promise<SourceSession | null> {
   try {
     return await refreshSession(session);
   } catch {
-    window.sessionStorage.removeItem(SOURCE_SESSION_KEY);
+    clearSourceSession();
     return null;
   }
 }
@@ -289,7 +280,7 @@ export async function loginAndLoadOfficialSource(
   password: string,
 ): Promise<OfficialSourceResult> {
   const email = resolveSourceAccountEmail(account);
-  if (!password) throw new Error('請輸入正式副主席系統密碼');
+  if (!password) throw new Error('請輸入共用密碼');
   const token = await sourceJson<AuthToken>(
     '/auth/v1/token?grant_type=password',
     {
@@ -310,10 +301,25 @@ export async function restoreAndLoadOfficialSource(): Promise<OfficialSourceResu
     return await loadData(session);
   } catch (error) {
     if (error instanceof SourceRequestError && error.status === 401) {
-      window.sessionStorage.removeItem(SOURCE_SESSION_KEY);
+      clearSourceSession();
       return null;
     }
     throw error;
+  }
+}
+
+export async function logoutOfficialSource(): Promise<void> {
+  const session = readSession();
+  clearSourceSession();
+  if (!session) return;
+  try {
+    await fetch(`${SOURCE_CONFIG.url}/auth/v1/logout?scope=local`, {
+      method: 'POST',
+      headers: headers(session.accessToken),
+      cache: 'no-store',
+    });
+  } catch {
+    // The local login is already cleared; remote revocation is best effort.
   }
 }
 

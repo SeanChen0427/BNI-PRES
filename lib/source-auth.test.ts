@@ -6,7 +6,7 @@ import {
   sourceResponseErrorMessage,
 } from './source-auth.ts';
 
-test('既有共用帳號會轉成來源 Auth Email', () => {
+void test('既有共用帳號會轉成來源 Auth Email', () => {
   assert.equal(resolveSourceAccountEmail('vice'), 'fulian0857+vp@gmail.com');
   assert.equal(
     resolveSourceAccountEmail(' Fulian '),
@@ -18,7 +18,7 @@ test('既有共用帳號會轉成來源 Auth Email', () => {
   );
 });
 
-test('仍接受完整 Email，並在送出前拒絕未知帳號', () => {
+void test('仍接受完整 Email，並在送出前拒絕未知帳號', () => {
   assert.equal(
     resolveSourceAccountEmail('person@example.com'),
     'person@example.com',
@@ -29,7 +29,7 @@ test('仍接受完整 Email，並在送出前拒絕未知帳號', () => {
   );
 });
 
-test('Supabase msg 與錯誤代碼會轉成可理解的中文訊息', () => {
+void test('Supabase msg 與錯誤代碼會轉成可理解的中文訊息', () => {
   assert.equal(
     sourceResponseErrorMessage(
       {
@@ -38,7 +38,7 @@ test('Supabase msg 與錯誤代碼會轉成可理解的中文訊息', () => {
       },
       400,
     ),
-    '帳號或密碼不正確',
+    '共用密碼不正確',
   );
   assert.equal(
     sourceResponseErrorMessage({ msg: '來源暫時不可用' }, 503),
