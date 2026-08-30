@@ -497,28 +497,28 @@ export default {
     try {
       const user = await authenticate(request, env);
       if (url.pathname === '/member-directory' && request.method === 'GET') {
-        return getMemberDirectory(request, env);
+        return await getMemberDirectory(request, env);
       }
       if (url.pathname === '/member-directory' && request.method === 'PUT') {
-        return putMemberDirectory(request, env, user);
+        return await putMemberDirectory(request, env, user);
       }
       if (url.pathname === '/workspace' && request.method === 'GET') {
-        return getWorkspace(request, env, url);
+        return await getWorkspace(request, env, url);
       }
       if (url.pathname === '/workspace' && request.method === 'PUT') {
-        return putWorkspace(request, env, url, user);
+        return await putWorkspace(request, env, url, user);
       }
       if (url.pathname === '/core-roster' && request.method === 'GET') {
-        return getCoreRoster(request, env, url);
+        return await getCoreRoster(request, env, url);
       }
       if (url.pathname === '/core-roster' && request.method === 'PUT') {
-        return putCoreRoster(request, env, user);
+        return await putCoreRoster(request, env, user);
       }
       if (
         url.pathname === '/core-roster/resolve' &&
         request.method === 'POST'
       ) {
-        return resolveCoreRoster(request, env, url);
+        return await resolveCoreRoster(request, env, url);
       }
       return json(request, env, { message: '找不到 API' }, 404);
     } catch (error) {
