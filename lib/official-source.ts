@@ -4,6 +4,10 @@ import type {
   WorkspaceState,
   WorkspaceSourceMeta,
 } from './leadership';
+import {
+  resolveSourceAccountEmail,
+  sourceResponseErrorMessage,
+} from './source-auth';
 
 const SOURCE_SESSION_KEY = 'fulian.leadership-team.official-source.v1';
 const WORKSPACE_API_URL = String(
@@ -85,15 +89,10 @@ async function sourceJson<T>(
     headers: requestHeaders,
     cache: 'no-store',
   });
-  const data = (await response.json().catch(() => ({}))) as T & {
-    message?: string;
-    error_description?: string;
-  };
+  const data = (await response.json().catch(() => ({}))) as T;
   if (!response.ok) {
     throw new SourceRequestError(
-      data.error_description ||
-        data.message ||
-        `正式來源 HTTP ${response.status}`,
+      sourceResponseErrorMessage(data, response.status),
       response.status,
     );
   }
@@ -119,9 +118,7 @@ export function hasOfficialSourceSession(): boolean {
   return Boolean(readSession());
 }
 
-function sessionFromToken(
-  token: AuthToken,
-): SourceSession {
+function sessionFromToken(token: AuthToken): SourceSession {
   return {
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
@@ -288,16 +285,16 @@ async function loadData(session: SourceSession): Promise<OfficialSourceResult> {
 }
 
 export async function loginAndLoadOfficialSource(
-  email: string,
+  account: string,
   password: string,
 ): Promise<OfficialSourceResult> {
-  if (!email.trim()) throw new Error('請輸入正式來源帳號');
+  const email = resolveSourceAccountEmail(account);
   if (!password) throw new Error('請輸入正式副主席系統密碼');
   const token = await sourceJson<AuthToken>(
     '/auth/v1/token?grant_type=password',
     {
       method: 'POST',
-      body: JSON.stringify({ email: email.trim(), password }),
+      body: JSON.stringify({ email, password }),
     },
   );
   const session = sessionFromToken(token);
@@ -330,7 +327,8 @@ export async function loadOfficialWorkspace(): Promise<WorkspaceState | null> {
     );
     return result.workspace;
   } catch (error) {
-    if (error instanceof SourceRequestError && error.status === 404) return null;
+    if (error instanceof SourceRequestError && error.status === 404)
+      return null;
     throw error;
   }
 }

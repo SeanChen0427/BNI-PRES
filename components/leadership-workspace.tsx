@@ -84,12 +84,7 @@ import {
 } from '@/lib/official-source';
 
 type WorkspaceView = 'board' | 'people' | 'issues';
-type CloudSyncStatus =
-  | 'idle'
-  | 'loading'
-  | 'saving'
-  | 'synced'
-  | 'error';
+type CloudSyncStatus = 'idle' | 'loading' | 'saving' | 'synced' | 'error';
 
 const GROUP_VISUALS: Record<
   string,
@@ -486,7 +481,7 @@ function LeadershipWorkspace() {
   const [draftRenewalThreshold, setDraftRenewalThreshold] = useState('');
   const [draftTrainingDate, setDraftTrainingDate] = useState('');
   const [sourceOpen, setSourceOpen] = useState(false);
-  const [sourceEmail, setSourceEmail] = useState('');
+  const [sourceAccount, setSourceAccount] = useState('vice');
   const [sourcePassword, setSourcePassword] = useState('');
   const [sourceLoading, setSourceLoading] = useState(false);
   const [sourceError, setSourceError] = useState('');
@@ -569,8 +564,7 @@ function LeadershipWorkspace() {
           setCloudSyncStatus('error');
           toast.add({
             title: 'D1 同步失敗',
-            description:
-              error instanceof Error ? error.message : '請稍後重試',
+            description: error instanceof Error ? error.message : '請稍後重試',
             type: 'error',
           });
         });
@@ -628,7 +622,7 @@ function LeadershipWorkspace() {
     setSourceError('');
     try {
       const result = await loginAndLoadOfficialSource(
-        sourceEmail,
+        sourceAccount,
         sourcePassword,
       );
       await acceptOfficialSource(result, '正式姓名與會籍已載入', true);
@@ -1593,19 +1587,24 @@ function LeadershipWorkspace() {
             <DialogHeader>
               <DialogTitle>載入正式姓名與會籍</DialogTitle>
               <DialogDescription>
-                使用既有副主席系統帳密登入。只會唯讀現任會員主檔與已發布快照，密碼不保存。
+                使用既有副主席系統共用帳密登入。只會唯讀現任會員主檔與已發布快照，密碼不保存。
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-3">
               <label className="grid gap-1.5 text-xs font-bold">
-                來源帳號 Email
+                既有共用帳號
                 <Input
-                  type="email"
+                  type="text"
                   autoComplete="username"
-                  value={sourceEmail}
-                  onChange={(event) => setSourceEmail(event.target.value)}
-                  placeholder="輸入現有共用帳號"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  value={sourceAccount}
+                  onChange={(event) => setSourceAccount(event.target.value)}
+                  placeholder="例如 vice"
                 />
+                <span className="font-normal text-muted-foreground">
+                  可使用 admin、vice 或 Fulian，不需輸入內部 Email。
+                </span>
               </label>
               <label className="grid gap-1.5 text-xs font-bold">
                 密碼
@@ -1633,7 +1632,9 @@ function LeadershipWorkspace() {
                 稍後再載入
               </Button>
               <Button
-                disabled={sourceLoading || !sourceEmail || !sourcePassword}
+                disabled={
+                  sourceLoading || !sourceAccount.trim() || !sourcePassword
+                }
                 onClick={() => void connectOfficialSource()}
               >
                 {sourceLoading ? (
