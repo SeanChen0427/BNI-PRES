@@ -11,21 +11,43 @@ import {
   getTermMetrics,
   isWorkspaceSnapshot,
   memberNeedsRenewal,
+  roleAcceptsAnotherAssignment,
   workspaceForPersistence,
   type Member,
   type OfficialCoreRoster,
+  type TeamGroup,
   type WorkspaceSourceMeta,
 } from './leadership.ts';
 
-test('示範資料可一致計算職位、缺額與問題', () => {
+test('示範資料可一致計算職位、核心缺額與問題', () => {
   const workspace = createDemoWorkspace();
   const term = getActiveTerm(workspace);
   const metrics = getTermMetrics(workspace, term);
 
   assert.equal(metrics.assignedPeople, 22);
   assert.equal(metrics.positions, 23);
-  assert.equal(metrics.gaps, 7);
+  assert.equal(metrics.coreGaps, 0);
   assert.equal(metrics.issueCount, 13);
+});
+
+test('下層組員不限人數，核心職務仍維持單一席次', () => {
+  const workspace = createDemoWorkspace();
+  const term = getActiveTerm(workspace);
+
+  assert.equal(roleAcceptsAnotherAssignment(term, 'group-membership'), true);
+  assert.equal(roleAcceptsAnotherAssignment(term, 'core-vice-chair'), false);
+});
+
+test('保存工作台時移除舊版小組人數上限欄位', () => {
+  const workspace = createDemoWorkspace();
+  const legacyGroup = workspace.terms[0].groups[0] as TeamGroup & {
+    capacity?: number;
+  };
+  legacyGroup.capacity = 4;
+
+  const snapshot = workspaceForPersistence(workspace);
+
+  assert.equal('capacity' in snapshot.terms[0].groups[0], false);
 });
 
 test('同一會員多職位只產生一筆兼任與一筆培訓問題', () => {

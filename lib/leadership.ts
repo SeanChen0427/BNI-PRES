@@ -49,7 +49,6 @@ export type TeamGroup = {
   title: string;
   memberRole: string;
   coreRoleIds: string[];
-  capacity: number;
   order: number;
 };
 
@@ -156,7 +155,6 @@ export const TEAM_GROUPS: TeamGroup[] = [
     title: '主席 ＋ 成長',
     memberRole: '領頭羊',
     coreRoleIds: ['core-chair', 'core-growth'],
-    capacity: 4,
     order: 1,
   },
   {
@@ -164,7 +162,6 @@ export const TEAM_GROUPS: TeamGroup[] = [
     title: '副主席',
     memberRole: '會員委員',
     coreRoleIds: ['core-vice-chair'],
-    capacity: 3,
     order: 2,
   },
   {
@@ -172,7 +169,6 @@ export const TEAM_GROUPS: TeamGroup[] = [
     title: '秘書財務',
     memberRole: '締結組',
     coreRoleIds: ['core-secretary-treasurer'],
-    capacity: 3,
     order: 3,
   },
   {
@@ -180,7 +176,6 @@ export const TEAM_GROUPS: TeamGroup[] = [
     title: '來賓接待',
     memberRole: '接待組員',
     coreRoleIds: ['core-reception'],
-    capacity: 3,
     order: 4,
   },
   {
@@ -188,7 +183,6 @@ export const TEAM_GROUPS: TeamGroup[] = [
     title: '活動協調',
     memberRole: '活動組員',
     coreRoleIds: ['core-events'],
-    capacity: 3,
     order: 5,
   },
   {
@@ -196,7 +190,6 @@ export const TEAM_GROUPS: TeamGroup[] = [
     title: '導師協調',
     memberRole: '導師',
     coreRoleIds: ['core-mentor'],
-    capacity: 3,
     order: 6,
   },
   {
@@ -204,7 +197,6 @@ export const TEAM_GROUPS: TeamGroup[] = [
     title: '教育培訓',
     memberRole: '6W 組員',
     coreRoleIds: ['core-training'],
-    capacity: 3,
     order: 7,
   },
 ];
@@ -476,6 +468,10 @@ export function workspaceForPersistence(
   workspace: WorkspaceState,
 ): WorkspaceState {
   const snapshot = cloneWorkspace(workspace);
+  snapshot.terms = snapshot.terms.map((term) => ({
+    ...term,
+    groups: term.groups.map(withoutLegacyGroupCapacity),
+  }));
   if (snapshot.sourceMeta?.mode === 'official') snapshot.members = [];
   return snapshot;
 }
@@ -524,30 +520,29 @@ export function getAssignedMemberIds(term: TermState): string[] {
   return [...new Set(term.assignments.map((item) => item.memberId))];
 }
 
-export function getTermMetrics(workspace: WorkspaceState, term: TermState) {
-  const coreCapacity = term.coreRoles.length;
-  const groupCapacity = term.groups.reduce(
-    (sum, group) => sum + group.capacity,
-    0,
+export function roleAcceptsAnotherAssignment(
+  term: TermState,
+  roleId: string,
+  ignoredAssignmentId?: string,
+): boolean {
+  if (term.groups.some((group) => group.id === roleId)) return true;
+  if (!term.coreRoles.some((role) => role.id === roleId)) return false;
+  return !term.assignments.some(
+    (item) => item.roleId === roleId && item.id !== ignoredAssignmentId,
   );
-  const gaps =
-    term.coreRoles.filter(
-      (role) => !term.assignments.some((item) => item.roleId === role.id),
-    ).length +
-    term.groups.reduce((sum, group) => {
-      const filled = term.assignments.filter(
-        (item) => item.roleId === group.id,
-      ).length;
-      return sum + Math.max(0, group.capacity - filled);
-    }, 0);
+}
+
+export function getTermMetrics(workspace: WorkspaceState, term: TermState) {
+  const coreGaps = term.coreRoles.filter(
+    (role) => !term.assignments.some((item) => item.roleId === role.id),
+  ).length;
   const assignedMemberIds = getAssignedMemberIds(term);
   const issues = getTermIssues(workspace, term);
 
   return {
     assignedPeople: assignedMemberIds.length,
     positions: term.assignments.length,
-    capacity: coreCapacity + groupCapacity,
-    gaps,
+    coreGaps,
     issueCount: issues.length,
     confirmedPositions: term.assignments.filter(
       (item) => item.decision === 'confirmed',
@@ -636,6 +631,12 @@ export function renewalStatusLabel(status: RenewalStatus): string {
   }[status];
 }
 
+function withoutLegacyGroupCapacity(group: TeamGroup): TeamGroup {
+  const currentGroup = { ...group } as TeamGroup & { capacity?: number };
+  delete currentGroup.capacity;
+  return currentGroup;
+}
+
 export function createNextTerm(workspace: WorkspaceState): WorkspaceState {
   const current = getActiveTerm(workspace);
   const nextNumber =
@@ -656,7 +657,7 @@ export function createNextTerm(workspace: WorkspaceState): WorkspaceState {
     endDate: '',
     sourceTermId: current.id,
     coreRoles: cloneStructure(current.coreRoles),
-    groups: cloneStructure(current.groups),
+    groups: current.groups.map(withoutLegacyGroupCapacity),
     assignments: [],
     training: {},
     renewal: {},

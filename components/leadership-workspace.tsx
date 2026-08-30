@@ -67,6 +67,7 @@ import {
   makeAssignmentId,
   memberNeedsRenewal,
   renewalStatusLabel,
+  roleAcceptsAnotherAssignment,
   workspaceForPersistence,
   type Assignment,
   type DecisionStatus,
@@ -283,7 +284,6 @@ function TeamCard({
   const groupAssignments = term.assignments.filter(
     (item) => item.kind === 'group' && item.roleId === group.id,
   );
-  const isFull = groupAssignments.length >= group.capacity;
 
   return (
     <article
@@ -310,11 +310,7 @@ function TeamCard({
               ) : null}
             </div>
           </div>
-          <div className="text-right">
-            <p className="text-xs font-bold">
-              {groupAssignments.length} / {group.capacity}
-            </p>
-          </div>
+          <p className="text-xs font-bold">{groupAssignments.length} 人</p>
         </div>
 
         <div
@@ -457,12 +453,11 @@ function TeamCard({
 
         <button
           type="button"
-          disabled={isFull}
           onClick={() => onAdd(group.id)}
-          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-input py-2.5 text-xs font-bold text-primary transition hover:border-primary/40 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-45"
+          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-input py-2.5 text-xs font-bold text-primary transition hover:border-primary/40 hover:bg-primary/5"
         >
           <Plus className="size-3.5" />
-          {isFull ? '名額已滿' : `加入${group.memberRole}`}
+          加入{group.memberRole}
         </button>
       </div>
     </article>
@@ -807,15 +802,15 @@ function LeadershipWorkspace() {
     const roleAssignments = term.assignments.filter(
       (item) => item.roleId === targetRoleId,
     );
-    const capacity =
-      option.kind === 'core'
-        ? 1
-        : (term.groups.find((group) => group.id === targetRoleId)?.capacity ??
-          0);
-    if (roleAssignments.length >= capacity) {
+    const alreadyAssigned = roleAssignments.some(
+      (item) => item.memberId === memberId,
+    );
+    if (alreadyAssigned || !roleAcceptsAnotherAssignment(term, targetRoleId)) {
       toast.add({
-        title: '這個職位目前沒有空位',
-        description: '請先移除或改派現有人選。',
+        title: alreadyAssigned ? '此人已在該職位' : '核心職務已有安排',
+        description: alreadyAssigned
+          ? undefined
+          : '請先移除或改派現有核心人選。',
         type: 'warning',
       });
       return;
@@ -885,16 +880,14 @@ function LeadershipWorkspace() {
     const alreadyAssigned = term.assignments.some(
       (item) => item.memberId === assignment.memberId && item.roleId === roleId,
     );
-    const capacity =
-      option.kind === 'core'
-        ? 1
-        : (term.groups.find((group) => group.id === roleId)?.capacity ?? 0);
-    const filled = term.assignments.filter(
-      (item) => item.roleId === roleId,
-    ).length;
-    if (alreadyAssigned || filled >= capacity) {
+    const targetAcceptsAssignment = roleAcceptsAnotherAssignment(
+      term,
+      roleId,
+      assignment.id,
+    );
+    if (alreadyAssigned || !targetAcceptsAssignment) {
       toast.add({
-        title: alreadyAssigned ? '此人已在該職位' : '目標職位沒有空位',
+        title: alreadyAssigned ? '此人已在該職位' : '核心職務已有安排',
         type: 'warning',
       });
       return;
@@ -1381,7 +1374,7 @@ function LeadershipWorkspace() {
               <div className="grid grid-cols-3 gap-2 sm:gap-3">
                 {[
                   ['已安排', metrics.assignedPeople, '人'],
-                  ['仍有缺口', metrics.gaps, '席'],
+                  ['核心缺額', metrics.coreGaps, '席'],
                   ['待處理', issues.length, '項'],
                 ].map(([label, value, unit]) => (
                   <Card
@@ -1420,7 +1413,7 @@ function LeadershipWorkspace() {
                           {metrics.confirmedPositions} 已定案
                         </span>
                         <span className="rounded-full bg-muted px-2.5 py-1">
-                          {metrics.positions} / {metrics.capacity} 職位
+                          {metrics.positions} 職位
                         </span>
                       </div>
                     </div>
