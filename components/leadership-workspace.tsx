@@ -8,7 +8,6 @@ import {
   CalendarDays,
   Check,
   CheckCircle2,
-  CircleAlert,
   Clock3,
   Database,
   Download,
@@ -873,7 +872,7 @@ function LeadershipWorkspace() {
             trainingDate: draftTrainingDate,
           },
         })),
-      '示範日期已更新，所有提醒已重新計算',
+      '工作台設定已保存（目前為瀏覽器草稿）',
     );
     setSettingsOpen(false);
   }
@@ -1102,6 +1101,15 @@ function LeadershipWorkspace() {
                   備份
                 </Button>
                 <Button
+                  variant="outline"
+                  className="bg-card px-3"
+                  aria-label="工作台設定"
+                  onClick={openSettings}
+                >
+                  <Settings2 data-icon="inline-start" />
+                  <span className="hidden md:inline">設定</span>
+                </Button>
+                <Button
                   className="bg-primary px-3.5 hover:bg-primary/90"
                   onClick={() =>
                     openAdd(term.groups[0]?.id ?? term.coreRoles[0]?.id ?? '')
@@ -1198,91 +1206,9 @@ function LeadershipWorkspace() {
               </div>
             </div>
 
-            <div
-              className={`mt-6 flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center ${
-                isOfficial
-                  ? workspace.sourceMeta?.reconciliation === 'mismatch'
-                    ? 'border-rose-200 bg-rose-50 text-rose-950'
-                    : 'border-emerald-200 bg-emerald-50 text-emerald-950'
-                  : 'border-amber-200 bg-amber-50 text-amber-950'
-              }`}
-            >
-              <span
-                className={`grid size-9 shrink-0 place-items-center rounded-xl ${
-                  isOfficial
-                    ? workspace.sourceMeta?.reconciliation === 'mismatch'
-                      ? 'bg-rose-200'
-                      : 'bg-emerald-200'
-                    : 'bg-amber-200'
-                }`}
-              >
-                {isOfficial ? (
-                  <ShieldCheck className="size-4" />
-                ) : (
-                  <Database className="size-4" />
-                )}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-black">
-                  {isOfficial
-                    ? workspace.sourceMeta?.reconciliation === 'mismatch'
-                      ? '正式主檔已載入，但分析快照人數不一致'
-                      : '正式姓名與會籍已從會員主檔載入'
-                    : '目前仍顯示虛構測試資料'}
-                </p>
-                <p className="mt-1 text-xs leading-5 opacity-75">
-                  {isOfficial
-                    ? `現任會員 ${workspace.sourceMeta?.memberCount ?? workspace.members.length} 位・會籍缺值 ${workspace.sourceMeta?.missingExpiryCount ?? 0} 位・8 長對上 ${workspace.sourceMeta?.coreRosterMatched ?? 0}/${workspace.sourceMeta?.coreRosterExpected ?? 8} 位；分析快照 ${workspace.sourceMeta?.snapshotPeriodEnd ? shortDate(workspace.sourceMeta.snapshotPeriodEnd) : '尚無日期'}／${workspace.sourceMeta?.snapshotMemberCount ?? '未提供'} 人。`
-                    : '登入既有副主席系統後，會直接讀取 Supabase 正式會員主檔與已發布快照；密碼不會保存。'}
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={sourceLoading}
-                className="bg-white/75"
-                onClick={() =>
-                  isOfficial
-                    ? void refreshOfficialSource()
-                    : setSourceOpen(true)
-                }
-              >
-                {sourceLoading ? (
-                  <Loader2 className="animate-spin" data-icon="inline-start" />
-                ) : isOfficial ? (
-                  <RefreshCw data-icon="inline-start" />
-                ) : (
-                  <LogIn data-icon="inline-start" />
-                )}
-                {isOfficial ? '重新讀取' : '載入正式資料'}
-              </Button>
-            </div>
-
             {view === 'board' ? (
               <>
-                <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50/80 p-4 text-amber-950 sm:flex-row sm:items-center">
-                  <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-amber-200">
-                    <CircleAlert className="size-4" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-black">續約門檻尚待確認</p>
-                    <p className="mt-1 text-xs leading-5 text-amber-900/70">
-                      目前以 {shortDate(term.settings.renewalThreshold)}{' '}
-                      作為示範提醒；調整後所有清單會一致重算，不會修改來源會籍日期。
-                    </p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="border-amber-300 bg-white/70 text-amber-950 hover:bg-white"
-                    onClick={openSettings}
-                  >
-                    <Settings2 data-icon="inline-start" />
-                    調整示範設定
-                  </Button>
-                </div>
-
-                <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+                <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
                   <section className="min-w-0 rounded-3xl border border-border/80 bg-card/70 p-4 shadow-[0_18px_50px_rgb(30_58_52/6%)] sm:p-5">
                     <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
                       <div>
@@ -1930,39 +1856,186 @@ function LeadershipWorkspace() {
         </Dialog>
 
         <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-          <DialogContent>
+          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
             <DialogHeader>
-              <DialogTitle>示範日期設定</DialogTitle>
+              <DialogTitle>工作台設定</DialogTitle>
               <DialogDescription>
-                續約規則仍待產品負責人確認。此處只調整第一版提示，不會修改來源會員資料。
+                集中查看正式資料來源，並設定本屆的續約與培訓提醒。
               </DialogDescription>
             </DialogHeader>
-            <label className="grid gap-1.5 text-xs font-bold">
-              續約提醒門檻
-              <Input
-                type="date"
-                value={draftRenewalThreshold}
-                onChange={(event) =>
-                  setDraftRenewalThreshold(event.target.value)
-                }
-              />
-              <span className="font-normal text-muted-foreground">
-                到期日在此日期以前（含當日）會列入提醒。
-              </span>
-            </label>
-            <label className="grid gap-1.5 text-xs font-bold">
-              主要培訓日期
-              <Input
-                type="date"
-                value={draftTrainingDate}
-                onChange={(event) => setDraftTrainingDate(event.target.value)}
-              />
-            </label>
+
+            <div className="space-y-4">
+              <section
+                className={`rounded-2xl border p-4 ${
+                  isOfficial
+                    ? workspace.sourceMeta?.reconciliation === 'mismatch'
+                      ? 'border-rose-200 bg-rose-50/80'
+                      : 'border-emerald-200 bg-emerald-50/80'
+                    : 'border-amber-200 bg-amber-50/80'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`grid size-8 place-items-center rounded-xl ${
+                        isOfficial
+                          ? workspace.sourceMeta?.reconciliation === 'mismatch'
+                            ? 'bg-rose-200 text-rose-900'
+                            : 'bg-emerald-200 text-emerald-900'
+                          : 'bg-amber-200 text-amber-900'
+                      }`}
+                    >
+                      {isOfficial ? (
+                        <ShieldCheck className="size-4" />
+                      ) : (
+                        <Database className="size-4" />
+                      )}
+                    </span>
+                    <div>
+                      <p className="text-xs font-black">正式資料來源</p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        {isOfficial
+                          ? '會員主檔已載入，只讀不回寫'
+                          : '目前使用虛構測試資料'}
+                      </p>
+                    </div>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black ${
+                      isOfficial
+                        ? workspace.sourceMeta?.reconciliation === 'mismatch'
+                          ? 'bg-rose-200 text-rose-950'
+                          : 'bg-emerald-200 text-emerald-950'
+                        : 'bg-amber-200 text-amber-950'
+                    }`}
+                  >
+                    {isOfficial
+                      ? workspace.sourceMeta?.reconciliation === 'mismatch'
+                        ? '待對帳'
+                        : '已載入'
+                      : '待載入'}
+                  </span>
+                </div>
+
+                {isOfficial ? (
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
+                    {[
+                      [
+                        '現任會員',
+                        `${workspace.sourceMeta?.memberCount ?? workspace.members.length} 位`,
+                      ],
+                      [
+                        '會籍缺值',
+                        `${workspace.sourceMeta?.missingExpiryCount ?? 0} 位`,
+                      ],
+                      [
+                        '8 長對上',
+                        `${workspace.sourceMeta?.coreRosterMatched ?? 0}/${workspace.sourceMeta?.coreRosterExpected ?? 8} 位`,
+                      ],
+                      [
+                        '分析快照',
+                        `${workspace.sourceMeta?.snapshotMemberCount ?? '未提供'} 人`,
+                      ],
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-xl bg-white/70 p-2.5">
+                        <p className="text-muted-foreground">{label}</p>
+                        <p className="mt-1 font-black">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-[11px] leading-5 text-amber-950/75">
+                    登入既有副主席系統後，會讀取 Supabase
+                    正式姓名與會籍；密碼不會保存。
+                  </p>
+                )}
+
+                {isOfficial && workspace.sourceMeta?.snapshotPeriodEnd ? (
+                  <p className="mt-3 text-[11px] text-muted-foreground">
+                    最新已發布快照：
+                    {shortDate(workspace.sourceMeta.snapshotPeriodEnd)}
+                  </p>
+                ) : null}
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={sourceLoading}
+                  className="mt-3 bg-white/75"
+                  onClick={() => {
+                    if (isOfficial) {
+                      void refreshOfficialSource();
+                    } else {
+                      setSettingsOpen(false);
+                      setSourceOpen(true);
+                    }
+                  }}
+                >
+                  {sourceLoading ? (
+                    <Loader2
+                      className="animate-spin"
+                      data-icon="inline-start"
+                    />
+                  ) : isOfficial ? (
+                    <RefreshCw data-icon="inline-start" />
+                  ) : (
+                    <LogIn data-icon="inline-start" />
+                  )}
+                  {isOfficial ? '重新讀取' : '載入正式資料'}
+                </Button>
+              </section>
+
+              <section className="rounded-2xl border border-border bg-muted/25 p-4">
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-black">續約與培訓</p>
+                    <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+                      調整後所有清單會立即重算，不會修改來源會籍日期。
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-900">
+                    規則尚待確認
+                  </span>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="grid gap-1.5 text-xs font-bold">
+                    續約提醒門檻
+                    <Input
+                      type="date"
+                      value={draftRenewalThreshold}
+                      onChange={(event) =>
+                        setDraftRenewalThreshold(event.target.value)
+                      }
+                    />
+                    <span className="font-normal leading-5 text-muted-foreground">
+                      到期日在此日期以前（含當日）列入提醒。
+                    </span>
+                  </label>
+                  <label className="grid content-start gap-1.5 text-xs font-bold">
+                    主要培訓日期
+                    <Input
+                      type="date"
+                      value={draftTrainingDate}
+                      onChange={(event) =>
+                        setDraftTrainingDate(event.target.value)
+                      }
+                    />
+                  </label>
+                </div>
+              </section>
+
+              <p className="rounded-xl bg-primary/5 px-3 py-2.5 text-[11px] leading-5 text-muted-foreground">
+                目前只暫存在這個瀏覽器，不會讀取電腦檔案。接上 BNI-PRES
+                獨立資料庫後，手機與電腦才會自動同步；委員會 Supabase
+                仍維持唯讀。
+              </p>
+            </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setSettingsOpen(false)}>
                 取消
               </Button>
-              <Button onClick={saveSettings}>套用並重算</Button>
+              <Button onClick={saveSettings}>保存並重算</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
