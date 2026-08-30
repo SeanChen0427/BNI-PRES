@@ -71,6 +71,50 @@ export type CoreRosterInput = {
   }>;
 };
 
+export type MemberDirectoryInput = {
+  members: Array<{
+    id: string;
+    name: string;
+    profession: string;
+    expiryDate: string;
+    status: 'active';
+    sourceUpdatedAt: string;
+  }>;
+  sourceMeta: Record<string, unknown>;
+};
+
+export function validateMemberDirectory(
+  value: unknown,
+): value is MemberDirectoryInput {
+  if (!isRecord(value) || !Array.isArray(value.members)) return false;
+  if (value.members.length < 1 || value.members.length > 500) return false;
+  if (!isRecord(value.sourceMeta)) return false;
+
+  const ids = new Set<string>();
+  for (const member of value.members) {
+    if (
+      !isRecord(member) ||
+      typeof member.id !== 'string' ||
+      !member.id ||
+      member.id.length > 128 ||
+      typeof member.name !== 'string' ||
+      !member.name.trim() ||
+      member.name.length > 100 ||
+      typeof member.profession !== 'string' ||
+      member.profession.length > 200 ||
+      typeof member.expiryDate !== 'string' ||
+      member.expiryDate.length > 32 ||
+      member.status !== 'active' ||
+      typeof member.sourceUpdatedAt !== 'string' ||
+      member.sourceUpdatedAt.length > 64
+    ) {
+      return false;
+    }
+    ids.add(member.id);
+  }
+  return ids.size === value.members.length;
+}
+
 export function validateCoreRoster(value: unknown): value is CoreRosterInput {
   if (!isRecord(value) || !isRecord(value.term)) return false;
   const term = value.term;

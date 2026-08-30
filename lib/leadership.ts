@@ -20,7 +20,10 @@ export type Member = {
 
 export type WorkspaceSourceMeta = {
   mode: 'demo' | 'official';
-  adapter: 'demo-adapter' | 'supabase-members-read-only';
+  adapter:
+    | 'demo-adapter'
+    | 'supabase-members-read-only'
+    | 'd1-official-member-cache';
   loadedAt: string | null;
   memberCount: number;
   missingExpiryCount: number;
@@ -431,8 +434,7 @@ export function applyOfficialSource(
     }
 
     const retainedNonRosterAssignments = retainedAssignments.filter(
-      (item) =>
-        item.kind !== 'core' || !officialCoreRoleIds.has(item.roleId),
+      (item) => item.kind !== 'core' || !officialCoreRoleIds.has(item.roleId),
     );
 
     return {

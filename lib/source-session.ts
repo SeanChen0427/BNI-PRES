@@ -1,6 +1,7 @@
 export const SOURCE_SESSION_KEY = 'fulian.leadership-team.official-source.v1';
 
 export type SourceSession = {
+  kind: 'shared' | 'source';
   accessToken: string;
   refreshToken: string;
   expiresAt: number;
@@ -12,14 +13,20 @@ function parseSession(raw: string | null): SourceSession | null {
   if (!raw) return null;
   try {
     const session = JSON.parse(raw) as Partial<SourceSession> | null;
+    const expiresAt = Number(session?.expiresAt);
     if (
       !session?.accessToken ||
       !session.refreshToken ||
-      !Number.isFinite(session.expiresAt)
+      !Number.isFinite(expiresAt)
     ) {
       return null;
     }
-    return session as SourceSession;
+    return {
+      kind: session.kind === 'shared' ? 'shared' : 'source',
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      expiresAt,
+    };
   } catch {
     return null;
   }

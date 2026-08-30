@@ -25,6 +25,7 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 const session: SourceSession = {
+  kind: 'shared',
   accessToken: 'access-token-for-test',
   refreshToken: 'refresh-token-for-test',
   expiresAt: 2_000_000_000_000,
@@ -38,6 +39,18 @@ void test('共用工作台登入會保存於目前裝置並清除舊分頁暫存
 
   assert.deepEqual(readSourceSession(persistent, legacy), session);
   assert.equal(legacy.getItem(SOURCE_SESSION_KEY), null);
+});
+
+void test('沒有 kind 的舊來源 session 仍可讀取', () => {
+  const persistent = memoryStorage({
+    [SOURCE_SESSION_KEY]: JSON.stringify({
+      accessToken: 'legacy-access',
+      refreshToken: 'legacy-refresh',
+      expiresAt: 2_000_000_000_000,
+    }),
+  });
+
+  assert.equal(readSourceSession(persistent, memoryStorage())?.kind, 'source');
 });
 
 void test('舊版分頁登入會自動搬到裝置儲存', () => {

@@ -18,6 +18,7 @@ const WORKSPACE_API_URL = String(
   import.meta.env.VITE_WORKSPACE_API_URL ||
     'https://bni-pres-api.seanchen0427.workers.dev',
 ).replace(/\/$/, '');
+const SHARED_SESSION_EXPIRES_AT = Date.UTC(2100, 0, 1);
 
 const SOURCE_CONFIG = Object.freeze({
   url: 'https://fahrblkukuhgveiptufn.supabase.co',
@@ -50,11 +51,30 @@ type SnapshotRow = {
   reconciliation: Record<string, unknown>;
 };
 
+type SourceDirectory = {
+  members: Member[];
+  importMembers: Array<{
+    id: string;
+    name: string;
+    profession: string;
+    expiryDate: string;
+    status: 'active';
+    sourceUpdatedAt: string;
+  }>;
+  sourceMeta: WorkspaceSourceMeta;
+};
+
 export type OfficialSourceResult = {
   members: Member[];
   roster: OfficialCoreRoster;
   sourceMeta: WorkspaceSourceMeta;
 };
+
+export class MemberDirectoryMissingError extends Error {
+  constructor() {
+    super('共同工作台還沒有會員名單');
+  }
+}
 
 class SourceRequestError extends Error {
   status: number;
@@ -111,6 +131,7 @@ export function hasOfficialSourceSession(): boolean {
 
 function sessionFromToken(token: AuthToken): SourceSession {
   return {
+    kind: 'source',
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
     expiresAt: Date.now() + Number(token.expires_in || 3600) * 1000,
@@ -130,33 +151,34 @@ async function refreshSession(session: SourceSession): Promise<SourceSession> {
   return refreshed;
 }
 
+async function verifySourceAccount(
+  session: SourceSession,
+  userId: string,
+): Promise<void> {
+  const rows = await sourceJson<Array<{ role: string; enabled: boolean }>>(
+    `/rest/v1/app_accounts?auth_user_id=eq.${encodeURIComponent(userId)}&select=role,enabled`,
+    {},
+    session.accessToken,
+  );
+  if (!rows[0]?.enabled) throw new Error('這個會員系統帳號未啟用');
+  if (!['admin', 'vp', 'committee'].includes(rows[0].role)) {
+    throw new Error('這個會員系統帳號無法讀取名單');
+  }
+}
+
 async function currentSession(): Promise<SourceSession | null> {
   const session = readSession();
   if (!session) return null;
   if (session.expiresAt - Date.now() > 30_000) return session;
+  if (session.kind === 'shared') {
+    clearSourceSession();
+    return null;
+  }
   try {
     return await refreshSession(session);
   } catch {
     clearSourceSession();
     return null;
-  }
-}
-
-async function verifyAccount(
-  session: SourceSession,
-  userId: string,
-): Promise<void> {
-  const rows = await sourceJson<
-    Array<{ role: string; label: string; enabled: boolean }>
-  >(
-    `/rest/v1/app_accounts?auth_user_id=eq.${encodeURIComponent(userId)}&select=role,label,enabled`,
-    {},
-    session.accessToken,
-  );
-  const account = rows[0];
-  if (!account?.enabled) throw new Error('此正式來源帳號目前未啟用');
-  if (!['admin', 'vp', 'committee'].includes(account.role)) {
-    throw new Error('此正式來源帳號沒有工作台角色');
   }
 }
 
@@ -167,7 +189,7 @@ async function workspaceJson<T>(
 ): Promise<T> {
   if (!WORKSPACE_API_URL) throw new Error('BNI-PRES D1 後台尚未設定');
   const requestHeaders = new Headers({
-    Authorization: `Bearer ${session.accessToken}`,
+    Authorization: `${session.kind === 'shared' ? 'Shared' : 'Bearer'} ${session.accessToken}`,
     'Content-Type': 'application/json',
   });
   new Headers(options.headers).forEach((value, key) =>
@@ -219,7 +241,9 @@ async function loadRoster(
   }
 }
 
-async function loadData(session: SourceSession): Promise<OfficialSourceResult> {
+async function fetchSourceDirectory(
+  session: SourceSession,
+): Promise<SourceDirectory> {
   const memberPath =
     '/rest/v1/members?status=eq.active&select=id,profession,membership_expires_on,updated_at,people!inner(display_name,status)&people.status=eq.active&order=created_at.asc';
   const snapshotPath =
@@ -240,7 +264,6 @@ async function loadData(session: SourceSession): Promise<OfficialSourceResult> {
       source: 'official-read-only',
     }));
   if (!members.length) throw new Error('正式會員主檔目前沒有可讀取的現任會員');
-  const roster = await loadRoster(session, members);
 
   const snapshot = snapshotRows[0] ?? null;
   const snapshotCount = snapshot?.member_count ?? null;
@@ -256,7 +279,16 @@ async function loadData(session: SourceSession): Promise<OfficialSourceResult> {
 
   return {
     members,
-    roster,
+    importMembers: memberRows
+      .filter((row) => row.id && row.people?.display_name)
+      .map((row) => ({
+        id: row.id,
+        name: row.people!.display_name,
+        profession: row.profession || '專業別待確認',
+        expiryDate: row.membership_expires_on || '',
+        status: 'active' as const,
+        sourceUpdatedAt: row.updated_at || '',
+      })),
     sourceMeta: {
       mode: 'official',
       adapter: 'supabase-members-read-only',
@@ -275,12 +307,23 @@ async function loadData(session: SourceSession): Promise<OfficialSourceResult> {
   };
 }
 
-export async function loginAndLoadOfficialSource(
+async function loadSourceData(
+  session: SourceSession,
+): Promise<OfficialSourceResult> {
+  const directory = await fetchSourceDirectory(session);
+  return {
+    members: directory.members,
+    roster: await loadRoster(session, directory.members),
+    sourceMeta: directory.sourceMeta,
+  };
+}
+
+export async function syncOfficialMemberDirectory(
   account: string,
   password: string,
-): Promise<OfficialSourceResult> {
+): Promise<number> {
   const email = resolveSourceAccountEmail(account);
-  if (!password) throw new Error('請輸入共用密碼');
+  if (!password) throw new Error('請輸入原會員系統密碼');
   const token = await sourceJson<AuthToken>(
     '/auth/v1/token?grant_type=password',
     {
@@ -289,16 +332,79 @@ export async function loginAndLoadOfficialSource(
     },
   );
   const session = sessionFromToken(token);
-  await verifyAccount(session, token.user.id);
-  saveSession(session);
-  return loadData(session);
+  await verifySourceAccount(session, token.user.id);
+  const directory = await fetchSourceDirectory(session);
+  const result = await workspaceJson<{ count: number }>(
+    '/member-directory',
+    session,
+    {
+      method: 'PUT',
+      body: JSON.stringify({
+        members: directory.importMembers,
+        sourceMeta: directory.sourceMeta,
+      }),
+    },
+  );
+  return result.count;
+}
+
+function createSharedSession(password: string): SourceSession {
+  if (!password) throw new Error('請輸入共用密碼');
+  return {
+    kind: 'shared',
+    accessToken: password,
+    refreshToken: password,
+    expiresAt: SHARED_SESSION_EXPIRES_AT,
+  };
+}
+
+async function loadSharedData(
+  session: SourceSession,
+): Promise<OfficialSourceResult> {
+  let directory: { members: Member[]; sourceMeta: WorkspaceSourceMeta };
+  try {
+    directory = await workspaceJson<{
+      members: Member[];
+      sourceMeta: WorkspaceSourceMeta;
+    }>('/member-directory', session);
+  } catch (error) {
+    if (error instanceof SourceRequestError && error.status === 503) {
+      throw new MemberDirectoryMissingError();
+    }
+    throw error;
+  }
+  if (!directory.members.length) {
+    throw new MemberDirectoryMissingError();
+  }
+  const roster = await loadRoster(session, directory.members);
+  return {
+    members: directory.members,
+    roster,
+    sourceMeta: directory.sourceMeta,
+  };
+}
+
+export async function loginAndLoadOfficialSource(
+  password: string,
+): Promise<OfficialSourceResult> {
+  const session = createSharedSession(password);
+  try {
+    const result = await loadSharedData(session);
+    saveSession(session);
+    return result;
+  } catch (error) {
+    if (error instanceof MemberDirectoryMissingError) saveSession(session);
+    throw error;
+  }
 }
 
 export async function restoreAndLoadOfficialSource(): Promise<OfficialSourceResult | null> {
   const session = await currentSession();
   if (!session) return null;
   try {
-    return await loadData(session);
+    return session.kind === 'shared'
+      ? await loadSharedData(session)
+      : await loadSourceData(session);
   } catch (error) {
     if (error instanceof SourceRequestError && error.status === 401) {
       clearSourceSession();
@@ -311,7 +417,7 @@ export async function restoreAndLoadOfficialSource(): Promise<OfficialSourceResu
 export async function logoutOfficialSource(): Promise<void> {
   const session = readSession();
   clearSourceSession();
-  if (!session) return;
+  if (!session || session.kind === 'shared') return;
   try {
     await fetch(`${SOURCE_CONFIG.url}/auth/v1/logout?scope=local`, {
       method: 'POST',

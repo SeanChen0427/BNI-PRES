@@ -38,7 +38,7 @@ void test('Supabase msg 與錯誤代碼會轉成可理解的中文訊息', () =>
       },
       400,
     ),
-    '共用密碼不正確',
+    '會員系統帳號或密碼不正確',
   );
   assert.equal(
     sourceResponseErrorMessage({ msg: '來源暫時不可用' }, 503),

@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   WORKSPACE_SCHEMA,
   validateCoreRoster,
+  validateMemberDirectory,
   validateWorkspacePayload,
 } from './validation.ts';
 
@@ -60,6 +61,30 @@ test('8 長必須是八個不重複的角色與來源會員 ID', () => {
         ...leader,
         memberId: 'same-id',
       })),
+    }),
+    false,
+  );
+});
+
+test('D1 最小會員目錄要求唯一 ID 與完整顯示欄位', () => {
+  const valid = {
+    members: [
+      {
+        id: 'source-id-1',
+        name: '虛構會員',
+        profession: '虛構專業',
+        expiryDate: '2027-01-01',
+        status: 'active',
+        sourceUpdatedAt: '2026-08-30T00:00:00.000Z',
+      },
+    ],
+    sourceMeta: { snapshotMemberCount: 1 },
+  };
+  assert.equal(validateMemberDirectory(valid), true);
+  assert.equal(
+    validateMemberDirectory({
+      ...valid,
+      members: [...valid.members, { ...valid.members[0] }],
     }),
     false,
   );

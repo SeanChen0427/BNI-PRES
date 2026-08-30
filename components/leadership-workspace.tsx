@@ -76,12 +76,14 @@ import {
   type WorkspaceState,
 } from '@/lib/leadership';
 import {
+  MemberDirectoryMissingError,
   hasOfficialSourceSession,
   loadOfficialWorkspace,
   loginAndLoadOfficialSource,
   logoutOfficialSource,
   restoreAndLoadOfficialSource,
   saveOfficialWorkspace,
+  syncOfficialMemberDirectory,
   type OfficialSourceResult,
 } from '@/lib/official-source';
 
@@ -487,6 +489,11 @@ function LeadershipWorkspace() {
   const [sourceLoading, setSourceLoading] = useState(false);
   const [sourceError, setSourceError] = useState('');
   const [sourceAuthenticated, setSourceAuthenticated] = useState(false);
+  const [directoryImportOpen, setDirectoryImportOpen] = useState(false);
+  const [directoryAccount, setDirectoryAccount] = useState('vice');
+  const [directoryPassword, setDirectoryPassword] = useState('');
+  const [directoryImportLoading, setDirectoryImportLoading] = useState(false);
+  const [directoryImportError, setDirectoryImportError] = useState('');
   const [cloudSyncStatus, setCloudSyncStatus] =
     useState<CloudSyncStatus>('idle');
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -539,6 +546,12 @@ function LeadershipWorkspace() {
         setSourceAuthenticated(true);
       })
       .catch((error: unknown) => {
+        if (error instanceof MemberDirectoryMissingError) {
+          setSourceAuthenticated(true);
+          setSourceOpen(false);
+          setDirectoryImportOpen(true);
+          return;
+        }
         setSourceError(
           error instanceof Error ? error.message : '正式資料讀取失敗',
         );
@@ -626,12 +639,19 @@ function LeadershipWorkspace() {
     setSourceLoading(true);
     setSourceError('');
     try {
-      const result = await loginAndLoadOfficialSource('vice', sourcePassword);
+      const result = await loginAndLoadOfficialSource(sourcePassword);
       await acceptOfficialSource(result, '正式姓名與會籍已載入', true);
       setSourceAuthenticated(true);
       setSourcePassword('');
       setSourceOpen(false);
     } catch (error) {
+      if (error instanceof MemberDirectoryMissingError) {
+        setSourceAuthenticated(true);
+        setSourcePassword('');
+        setSourceOpen(false);
+        setDirectoryImportOpen(true);
+        return;
+      }
       setSourceError(
         error instanceof Error ? error.message : '正式資料讀取失敗',
       );
@@ -640,24 +660,23 @@ function LeadershipWorkspace() {
     }
   }
 
-  async function refreshOfficialSource() {
-    setSourceLoading(true);
-    setSourceError('');
+  async function importOfficialDirectory() {
+    setDirectoryImportLoading(true);
+    setDirectoryImportError('');
     try {
+      await syncOfficialMemberDirectory(directoryAccount, directoryPassword);
       const result = await restoreAndLoadOfficialSource();
-      if (!result) {
-        setSourceAuthenticated(false);
-        setSourceOpen(true);
-        return;
-      }
-      await acceptOfficialSource(result, '正式資料已重新讀取');
+      if (!result) throw new Error('共同工作台連線已失效');
+      await acceptOfficialSource(result, '會員名單已更新', true);
+      setSourceAuthenticated(true);
+      setDirectoryPassword('');
+      setDirectoryImportOpen(false);
     } catch (error) {
-      setSourceError(
-        error instanceof Error ? error.message : '正式資料讀取失敗',
+      setDirectoryImportError(
+        error instanceof Error ? error.message : '會員名單更新失敗',
       );
-      setSourceOpen(true);
     } finally {
-      setSourceLoading(false);
+      setDirectoryImportLoading(false);
     }
   }
 
@@ -1102,7 +1121,7 @@ function LeadershipWorkspace() {
                 type="button"
                 onClick={() =>
                   isOfficial
-                    ? void refreshOfficialSource()
+                    ? setDirectoryImportOpen(true)
                     : setSourceOpen(true)
                 }
                 className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/85 hover:text-white"
@@ -1644,7 +1663,7 @@ function LeadershipWorkspace() {
                   placeholder="輸入共用密碼"
                 />
                 <span className="font-normal text-muted-foreground">
-                  不需要帳號；密碼本身不會保存在工作台。
+                  不需要帳號；這台裝置登入一次後就會記住，直到你登出。
                 </span>
               </label>
               {sourceError ? (
@@ -1665,6 +1684,81 @@ function LeadershipWorkspace() {
                   <LogIn data-icon="inline-start" />
                 )}
                 進入共同工作台
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={directoryImportOpen}
+          onOpenChange={(open) => {
+            setDirectoryImportOpen(open);
+            if (!open) {
+              setDirectoryPassword('');
+              setDirectoryImportError('');
+            }
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>更新共同會員名單</DialogTitle>
+              <DialogDescription>
+                登入原會員系統這一次，抓取姓名、專業別與到期日後記錄在共同工作台。帳密不會保存。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-3">
+              <label className="grid gap-1.5 text-xs font-bold">
+                原會員系統帳號
+                <Input
+                  type="text"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  value={directoryAccount}
+                  onChange={(event) => setDirectoryAccount(event.target.value)}
+                  placeholder="例如 vice"
+                />
+                <span className="font-normal text-muted-foreground">
+                  可使用 admin、vice 或 Fulian。
+                </span>
+              </label>
+              <label className="grid gap-1.5 text-xs font-bold">
+                原會員系統密碼
+                <Input
+                  type="password"
+                  autoComplete="current-password"
+                  value={directoryPassword}
+                  onChange={(event) => setDirectoryPassword(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !directoryImportLoading) {
+                      void importOfficialDirectory();
+                    }
+                  }}
+                  placeholder="只用這次抓取"
+                />
+              </label>
+              {directoryImportError ? (
+                <div className="rounded-xl bg-rose-50 px-3 py-2.5 text-xs font-bold text-rose-800">
+                  {directoryImportError}
+                </div>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button
+                className="w-full sm:w-auto"
+                disabled={
+                  directoryImportLoading ||
+                  !directoryAccount.trim() ||
+                  !directoryPassword
+                }
+                onClick={() => void importOfficialDirectory()}
+              >
+                {directoryImportLoading ? (
+                  <Loader2 className="animate-spin" data-icon="inline-start" />
+                ) : (
+                  <RefreshCw data-icon="inline-start" />
+                )}
+                抓取並記錄名單
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -2023,8 +2117,7 @@ function LeadershipWorkspace() {
                   </div>
                 ) : (
                   <p className="mt-3 text-[11px] leading-5 text-amber-950/75">
-                    輸入共同工作台密碼後，會自動讀取 Supabase 正式姓名、會籍與
-                    D1 共用進度；密碼不會保存。
+                    輸入共同工作台密碼後，會自動讀取正式名單與共用進度；這台裝置登入一次後就會記住。
                   </p>
                 )}
 
@@ -2042,7 +2135,7 @@ function LeadershipWorkspace() {
                   className="mt-3 bg-white/75"
                   onClick={() => {
                     if (isOfficial) {
-                      void refreshOfficialSource();
+                      setDirectoryImportOpen(true);
                     } else {
                       setSettingsOpen(false);
                       setSourceOpen(true);
@@ -2059,7 +2152,7 @@ function LeadershipWorkspace() {
                   ) : (
                     <LogIn data-icon="inline-start" />
                   )}
-                  {isOfficial ? '更新會員資料' : '登入共同工作台'}
+                  {isOfficial ? '從會員系統更新名單' : '登入共同工作台'}
                 </Button>
               </section>
 

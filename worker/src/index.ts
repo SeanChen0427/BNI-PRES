@@ -1,6 +1,7 @@
 import {
   WORKSPACE_SCHEMA,
   validateCoreRoster,
+  validateMemberDirectory,
   validateWorkspacePayload,
 } from './validation';
 
@@ -10,6 +11,7 @@ type Env = {
   SOURCE_SUPABASE_ANON_KEY: string;
   ALLOWED_ORIGINS: string;
   ROSTER_HMAC_SECRET: string;
+  SHARED_WORKSPACE_PASSWORD: string;
 };
 
 type SourceUser = {
@@ -67,8 +69,22 @@ function json(
 
 async function authenticate(request: Request, env: Env): Promise<SourceUser> {
   const authorization = request.headers.get('Authorization');
+  if (authorization?.startsWith('Shared ')) {
+    const password = authorization.slice('Shared '.length);
+    if (!env.SHARED_WORKSPACE_PASSWORD) {
+      throw new HttpError('共同工作台登入尚未設定', 503);
+    }
+    if (password !== env.SHARED_WORKSPACE_PASSWORD) {
+      throw new HttpError('共用密碼不正確', 401);
+    }
+    return {
+      id: 'shared-workspace',
+      email: 'shared-workspace@local.invalid',
+      role: 'committee',
+    };
+  }
   if (!authorization?.startsWith('Bearer ')) {
-    throw new HttpError('需要正式來源帳號', 401);
+    throw new HttpError('請先輸入共用密碼', 401);
   }
   const commonHeaders = {
     apikey: env.SOURCE_SUPABASE_ANON_KEY,
@@ -88,7 +104,10 @@ async function authenticate(request: Request, env: Env): Promise<SourceUser> {
   if (!accountResponse.ok) throw new HttpError('無法確認帳號權限', 403);
   const accounts = (await accountResponse.json()) as AppAccount[];
   const account = accounts[0];
-  if (!account?.enabled || !['admin', 'vp', 'committee'].includes(account.role)) {
+  if (
+    !account?.enabled ||
+    !['admin', 'vp', 'committee'].includes(account.role)
+  ) {
     throw new HttpError('此帳號未啟用工作台權限', 403);
   }
   return { id: user.id, email: user.email, role: account.role };
@@ -140,6 +159,113 @@ async function putWorkspace(
     .bind(key, WORKSPACE_SCHEMA, JSON.stringify(payload), updatedAt, user.id)
     .run();
   return json(request, env, { ok: true, updatedAt });
+}
+
+async function getMemberDirectory(request: Request, env: Env) {
+  const rows = await env.DB.prepare(
+    `SELECT member_id, display_name, profession, expiry_date, status,
+            source_updated_at, cached_at
+     FROM leadership_member_directory
+     WHERE status = 'active'
+     ORDER BY display_name`,
+  ).all<{
+    member_id: string;
+    display_name: string;
+    profession: string;
+    expiry_date: string;
+    status: 'active';
+    source_updated_at: string;
+    cached_at: string;
+  }>();
+  if (!rows.results.length) {
+    throw new HttpError('正式會員目錄尚未載入', 503);
+  }
+  const metaRow = await env.DB.prepare(
+    `SELECT payload_json, updated_at
+     FROM leadership_source_cache_meta
+     WHERE cache_key = 'official-members'`,
+  ).first<{ payload_json: string; updated_at: string }>();
+  const sourceMeta = metaRow
+    ? (JSON.parse(metaRow.payload_json) as Record<string, unknown>)
+    : {};
+  return json(request, env, {
+    members: rows.results.map((row) => ({
+      id: row.member_id,
+      name: row.display_name,
+      profession: row.profession || '專業別待確認',
+      expiryDate: row.expiry_date,
+      status: 'active',
+      source: 'official-read-only',
+    })),
+    sourceMeta: {
+      snapshotPeriodEnd: null,
+      snapshotGeneratedAt: null,
+      snapshotFingerprint: null,
+      snapshotMemberCount: null,
+      reconciliation: 'unavailable',
+      ...sourceMeta,
+      mode: 'official',
+      adapter: 'd1-official-member-cache',
+      loadedAt: metaRow?.updated_at || rows.results[0].cached_at,
+      memberCount: rows.results.length,
+      missingExpiryCount: rows.results.filter((row) => !row.expiry_date).length,
+      memberMasterUpdatedAt:
+        rows.results
+          .map((row) => row.source_updated_at)
+          .filter(Boolean)
+          .sort()
+          .at(-1) || null,
+      coreRosterExpected: 0,
+      coreRosterMatched: 0,
+    },
+  });
+}
+
+async function putMemberDirectory(
+  request: Request,
+  env: Env,
+  user: SourceUser,
+) {
+  if (user.id === 'shared-workspace') {
+    throw new HttpError('請先在設定裡登入原會員系統', 403);
+  }
+  const payload = await request.json().catch(() => null);
+  if (!validateMemberDirectory(payload)) {
+    throw new HttpError('正式會員目錄格式錯誤', 400);
+  }
+  const cachedAt = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM leadership_member_directory'),
+    ...payload.members.map((member) =>
+      env.DB.prepare(
+        `INSERT INTO leadership_member_directory
+          (member_id, display_name, profession, expiry_date, status,
+           source_updated_at, cached_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        member.id,
+        member.name,
+        member.profession,
+        member.expiryDate,
+        member.status,
+        member.sourceUpdatedAt,
+        cachedAt,
+      ),
+    ),
+    env.DB.prepare(
+      `INSERT INTO leadership_source_cache_meta
+        (cache_key, payload_json, updated_at)
+       VALUES ('official-members', ?, ?)
+       ON CONFLICT(cache_key) DO UPDATE SET
+        payload_json = excluded.payload_json,
+        updated_at = excluded.updated_at`,
+    ).bind(JSON.stringify(payload.sourceMeta), cachedAt),
+  ]);
+  return json(request, env, {
+    ok: true,
+    count: payload.members.length,
+    updatedAt: cachedAt,
+  });
 }
 
 async function getCoreRoster(request: Request, env: Env, url: URL) {
@@ -275,9 +401,9 @@ async function resolveCoreRoster(request: Request, env: Env, url: URL) {
 
   const now = new Date().toISOString();
   await env.DB.batch([
-    env.DB.prepare('DELETE FROM leadership_core_roster WHERE term_number = ?').bind(
-      termNumber,
-    ),
+    env.DB.prepare(
+      'DELETE FROM leadership_core_roster WHERE term_number = ?',
+    ).bind(termNumber),
     ...resolved.map((row) =>
       env.DB.prepare(
         `INSERT INTO leadership_core_roster
@@ -292,16 +418,13 @@ async function resolveCoreRoster(request: Request, env: Env, url: URL) {
   return getCoreRoster(request, env, url);
 }
 
-async function putCoreRoster(
-  request: Request,
-  env: Env,
-  user: SourceUser,
-) {
+async function putCoreRoster(request: Request, env: Env, user: SourceUser) {
   if (user.role !== 'admin') {
     throw new HttpError('只有 Admin 可設定正式 8 長', 403);
   }
   const payload = await request.json().catch(() => null);
-  if (!validateCoreRoster(payload)) throw new HttpError('8 長資料格式錯誤', 400);
+  if (!validateCoreRoster(payload))
+    throw new HttpError('8 長資料格式錯誤', 400);
   const now = new Date().toISOString();
   const statements = [
     env.DB.prepare(
@@ -324,9 +447,9 @@ async function putCoreRoster(
       payload.term.endsOn || '',
       now,
     ),
-    env.DB.prepare('DELETE FROM leadership_core_roster WHERE term_number = ?').bind(
-      payload.term.number,
-    ),
+    env.DB.prepare(
+      'DELETE FROM leadership_core_roster WHERE term_number = ?',
+    ).bind(payload.term.number),
     ...payload.coreLeaders.map((leader) =>
       env.DB.prepare(
         `INSERT INTO leadership_core_roster
@@ -364,11 +487,21 @@ export default {
       });
     }
     if (url.pathname === '/health' && request.method === 'GET') {
-      return json(request, env, { ok: true, service: 'bni-pres-api', database: 'd1' });
+      return json(request, env, {
+        ok: true,
+        service: 'bni-pres-api',
+        database: 'd1',
+      });
     }
 
     try {
       const user = await authenticate(request, env);
+      if (url.pathname === '/member-directory' && request.method === 'GET') {
+        return getMemberDirectory(request, env);
+      }
+      if (url.pathname === '/member-directory' && request.method === 'PUT') {
+        return putMemberDirectory(request, env, user);
+      }
       if (url.pathname === '/workspace' && request.method === 'GET') {
         return getWorkspace(request, env, url);
       }
@@ -381,7 +514,10 @@ export default {
       if (url.pathname === '/core-roster' && request.method === 'PUT') {
         return putCoreRoster(request, env, user);
       }
-      if (url.pathname === '/core-roster/resolve' && request.method === 'POST') {
+      if (
+        url.pathname === '/core-roster/resolve' &&
+        request.method === 'POST'
+      ) {
         return resolveCoreRoster(request, env, url);
       }
       return json(request, env, { message: '找不到 API' }, 404);

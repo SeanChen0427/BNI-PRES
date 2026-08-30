@@ -36,7 +36,7 @@ export function sourceResponseErrorMessage(
   const payload =
     data && typeof data === 'object' ? (data as SourceErrorPayload) : {};
   const errorCode = textField(payload.error_code);
-  if (errorCode === 'invalid_credentials') return '共用密碼不正確';
+  if (errorCode === 'invalid_credentials') return '會員系統帳號或密碼不正確';
   if (errorCode === 'email_address_invalid') return '帳號格式不正確';
 
   const message =
@@ -44,6 +44,8 @@ export function sourceResponseErrorMessage(
     textField(payload.msg) ||
     textField(payload.message) ||
     textField(payload.error);
-  if (message === 'Invalid login credentials') return '共用密碼不正確';
+  if (message === 'Invalid login credentials') {
+    return '會員系統帳號或密碼不正確';
+  }
   return message || `正式來源 HTTP ${status}`;
 }
