@@ -1,0 +1,16 @@
+name = "bni-pres-api"
+main = "worker/src/index.ts"
+compatibility_date = "2026-08-30"
+workers_dev = true
+preview_urls = false
+
+[vars]
+SOURCE_SUPABASE_URL = "https://fahrblkukuhgveiptufn.supabase.co"
+SOURCE_SUPABASE_ANON_KEY = "sb_publishable_f5U5bDJjXjvRxYSzh7zqGQ__lF-jwPZ"
+ALLOWED_ORIGINS = "https://seanchen0427.github.io,http://localhost:5173,http://127.0.0.1:5173"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bni-pres"
+database_id = "013f1a10-d73f-40f2-b7c1-4b935a91a8b8"
+migrations_dir = "worker/migrations"

@@ -11,10 +11,9 @@
 # testing
 /coverage
 
-# next.js
+# obsolete local framework output (not deployed)
 /.next/
 /.vinext/
-/out/
 
 # misc
 .DS_Store

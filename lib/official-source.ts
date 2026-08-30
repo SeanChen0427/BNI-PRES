@@ -1,38 +1,22 @@
 import type {
   Member,
   OfficialCoreRoster,
+  WorkspaceState,
   WorkspaceSourceMeta,
 } from './leadership';
 
 const SOURCE_SESSION_KEY = 'fulian.leadership-team.official-source.v1';
+const WORKSPACE_API_URL = String(
+  import.meta.env.VITE_WORKSPACE_API_URL ||
+    'https://bni-pres-api.seanchen0427.workers.dev',
+).replace(/\/$/, '');
 
 const SOURCE_CONFIG = Object.freeze({
   url: 'https://fahrblkukuhgveiptufn.supabase.co',
   publishableKey: 'sb_publishable_f5U5bDJjXjvRxYSzh7zqGQ__lF-jwPZ',
 });
 
-const SOURCE_ACCOUNTS = Object.freeze({
-  admin: {
-    email: 'fulian0857+admin@gmail.com',
-    role: 'admin',
-    label: 'Admin',
-  },
-  vice: {
-    email: 'fulian0857+vp@gmail.com',
-    role: 'vp',
-    label: '副主席',
-  },
-  Fulian: {
-    email: 'fulian0857+committee@gmail.com',
-    role: 'committee',
-    label: '會員委員',
-  },
-});
-
-export type OfficialSourceAccount = keyof typeof SOURCE_ACCOUNTS;
-
 type SourceSession = {
-  account: OfficialSourceAccount;
   accessToken: string;
   refreshToken: string;
   expiresAt: number;
@@ -79,7 +63,7 @@ class SourceRequestError extends Error {
   }
 }
 
-function headers(accessToken?: string): HeadersInit {
+function headers(accessToken?: string): Record<string, string> {
   return {
     apikey: SOURCE_CONFIG.publishableKey,
     'Content-Type': 'application/json',
@@ -92,9 +76,13 @@ async function sourceJson<T>(
   options: RequestInit = {},
   accessToken?: string,
 ): Promise<T> {
+  const requestHeaders = new Headers(headers(accessToken));
+  new Headers(options.headers).forEach((value, key) =>
+    requestHeaders.set(key, value),
+  );
   const response = await fetch(`${SOURCE_CONFIG.url}${path}`, {
     ...options,
-    headers: { ...headers(accessToken), ...(options.headers ?? {}) },
+    headers: requestHeaders,
     cache: 'no-store',
   });
   const data = (await response.json().catch(() => ({}))) as T & {
@@ -132,11 +120,9 @@ export function hasOfficialSourceSession(): boolean {
 }
 
 function sessionFromToken(
-  account: OfficialSourceAccount,
   token: AuthToken,
 ): SourceSession {
   return {
-    account,
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
     expiresAt: Date.now() + Number(token.expires_in || 3600) * 1000,
@@ -151,7 +137,7 @@ async function refreshSession(session: SourceSession): Promise<SourceSession> {
       body: JSON.stringify({ refresh_token: session.refreshToken }),
     },
   );
-  const refreshed = sessionFromToken(session.account, token);
+  const refreshed = sessionFromToken(token);
   saveSession(refreshed);
   return refreshed;
 }
@@ -181,22 +167,68 @@ async function verifyAccount(
   );
   const account = rows[0];
   if (!account?.enabled) throw new Error('此正式來源帳號目前未啟用');
-  if (account.role !== SOURCE_ACCOUNTS[session.account].role) {
-    throw new Error('正式來源帳號角色設定不一致');
+  if (!['admin', 'vp', 'committee'].includes(account.role)) {
+    throw new Error('此正式來源帳號沒有工作台角色');
   }
 }
 
-async function loadRoster(): Promise<OfficialCoreRoster> {
-  const response = await fetch('/api/formal-core-roster', {
+async function workspaceJson<T>(
+  path: string,
+  session: SourceSession,
+  options: RequestInit = {},
+): Promise<T> {
+  if (!WORKSPACE_API_URL) throw new Error('BNI-PRES D1 後台尚未設定');
+  const requestHeaders = new Headers({
+    Authorization: `Bearer ${session.accessToken}`,
+    'Content-Type': 'application/json',
+  });
+  new Headers(options.headers).forEach((value, key) =>
+    requestHeaders.set(key, value),
+  );
+  const response = await fetch(`${WORKSPACE_API_URL}${path}`, {
+    ...options,
+    headers: requestHeaders,
     cache: 'no-store',
   });
-  const data = (await response
-    .json()
-    .catch(() => ({}))) as OfficialCoreRoster & {
+  const data = (await response.json().catch(() => ({}))) as T & {
     message?: string;
   };
-  if (!response.ok) throw new Error(data.message || '無法讀取第 11 屆 8 長');
+  if (!response.ok) {
+    throw new SourceRequestError(
+      data.message || `BNI-PRES D1 HTTP ${response.status}`,
+      response.status,
+    );
+  }
   return data;
+}
+
+async function loadRoster(
+  session: SourceSession,
+  members: Member[],
+): Promise<OfficialCoreRoster> {
+  try {
+    return await workspaceJson<OfficialCoreRoster>(
+      '/core-roster?term=11',
+      session,
+    );
+  } catch (error) {
+    if (!(error instanceof SourceRequestError) || error.status !== 409) {
+      throw error;
+    }
+    return workspaceJson<OfficialCoreRoster>(
+      '/core-roster/resolve?term=11',
+      session,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          members: members.map((member) => ({
+            memberId: member.id,
+            name: member.name,
+          })),
+        }),
+      },
+    );
+  }
 }
 
 async function loadData(session: SourceSession): Promise<OfficialSourceResult> {
@@ -204,10 +236,9 @@ async function loadData(session: SourceSession): Promise<OfficialSourceResult> {
     '/rest/v1/members?status=eq.active&select=id,profession,membership_expires_on,updated_at,people!inner(display_name,status)&people.status=eq.active&order=created_at.asc';
   const snapshotPath =
     '/rest/v1/analysis_snapshots?is_published=eq.true&select=schema_version,analysis_version,period_end,generated_at,source_version,source_fingerprint,member_count,reconciliation&order=period_end.desc,generated_at.desc&limit=1';
-  const [memberRows, snapshotRows, roster] = await Promise.all([
+  const [memberRows, snapshotRows] = await Promise.all([
     sourceJson<MemberRow[]>(memberPath, {}, session.accessToken),
     sourceJson<SnapshotRow[]>(snapshotPath, {}, session.accessToken),
-    loadRoster(),
   ]);
 
   const members: Member[] = memberRows
@@ -221,6 +252,7 @@ async function loadData(session: SourceSession): Promise<OfficialSourceResult> {
       source: 'official-read-only',
     }));
   if (!members.length) throw new Error('正式會員主檔目前沒有可讀取的現任會員');
+  const roster = await loadRoster(session, members);
 
   const snapshot = snapshotRows[0] ?? null;
   const snapshotCount = snapshot?.member_count ?? null;
@@ -256,19 +288,19 @@ async function loadData(session: SourceSession): Promise<OfficialSourceResult> {
 }
 
 export async function loginAndLoadOfficialSource(
-  account: OfficialSourceAccount,
+  email: string,
   password: string,
 ): Promise<OfficialSourceResult> {
-  const expected = SOURCE_ACCOUNTS[account];
+  if (!email.trim()) throw new Error('請輸入正式來源帳號');
   if (!password) throw new Error('請輸入正式副主席系統密碼');
   const token = await sourceJson<AuthToken>(
     '/auth/v1/token?grant_type=password',
     {
       method: 'POST',
-      body: JSON.stringify({ email: expected.email, password }),
+      body: JSON.stringify({ email: email.trim(), password }),
     },
   );
-  const session = sessionFromToken(account, token);
+  const session = sessionFromToken(token);
   await verifyAccount(session, token.user.id);
   saveSession(session);
   return loadData(session);
@@ -288,9 +320,30 @@ export async function restoreAndLoadOfficialSource(): Promise<OfficialSourceResu
   }
 }
 
-export const OFFICIAL_SOURCE_ACCOUNT_OPTIONS = Object.entries(
-  SOURCE_ACCOUNTS,
-).map(([value, item]) => ({
-  value: value as OfficialSourceAccount,
-  label: item.label,
-}));
+export async function loadOfficialWorkspace(): Promise<WorkspaceState | null> {
+  const session = await currentSession();
+  if (!session) return null;
+  try {
+    const result = await workspaceJson<{ workspace: WorkspaceState }>(
+      '/workspace?key=main',
+      session,
+    );
+    return result.workspace;
+  } catch (error) {
+    if (error instanceof SourceRequestError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export async function saveOfficialWorkspace(
+  workspace: WorkspaceState,
+): Promise<string> {
+  const session = await currentSession();
+  if (!session) throw new Error('正式來源登入已失效');
+  const result = await workspaceJson<{ updatedAt: string }>(
+    '/workspace?key=main',
+    session,
+    { method: 'PUT', body: JSON.stringify(workspace) },
+  );
+  return result.updatedAt;
+}

@@ -3,12 +3,10 @@
 import {
   AlertTriangle,
   ArrowRight,
-  BriefcaseBusiness,
   CalendarClock,
   CalendarDays,
   Check,
   CheckCircle2,
-  Clock3,
   Database,
   Download,
   FileUp,
@@ -24,7 +22,6 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
-  UserRound,
   UsersRound,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
@@ -78,15 +75,21 @@ import {
   type WorkspaceState,
 } from '@/lib/leadership';
 import {
-  OFFICIAL_SOURCE_ACCOUNT_OPTIONS,
   hasOfficialSourceSession,
+  loadOfficialWorkspace,
   loginAndLoadOfficialSource,
   restoreAndLoadOfficialSource,
-  type OfficialSourceAccount,
+  saveOfficialWorkspace,
   type OfficialSourceResult,
 } from '@/lib/official-source';
 
 type WorkspaceView = 'board' | 'people' | 'issues';
+type CloudSyncStatus =
+  | 'idle'
+  | 'loading'
+  | 'saving'
+  | 'synced'
+  | 'error';
 
 const GROUP_VISUALS: Record<
   string,
@@ -189,6 +192,16 @@ function savedLabel(value: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   })} 已儲存`;
+}
+
+function cloudSyncLabel(status: CloudSyncStatus): string {
+  return {
+    idle: '尚未連線',
+    loading: '正在載入 D1',
+    saving: '正在同步 D1',
+    synced: 'D1 已同步',
+    error: 'D1 同步失敗',
+  }[status];
 }
 
 function getGroupVisual(groupId: string) {
@@ -473,13 +486,18 @@ function LeadershipWorkspace() {
   const [draftRenewalThreshold, setDraftRenewalThreshold] = useState('');
   const [draftTrainingDate, setDraftTrainingDate] = useState('');
   const [sourceOpen, setSourceOpen] = useState(false);
-  const [sourceAccount, setSourceAccount] =
-    useState<OfficialSourceAccount>('vice');
+  const [sourceEmail, setSourceEmail] = useState('');
   const [sourcePassword, setSourcePassword] = useState('');
   const [sourceLoading, setSourceLoading] = useState(false);
   const [sourceError, setSourceError] = useState('');
+  const [cloudSyncStatus, setCloudSyncStatus] =
+    useState<CloudSyncStatus>('idle');
   const importInputRef = useRef<HTMLInputElement>(null);
   const sourceRestoreStarted = useRef(false);
+  const cloudReady = useRef(false);
+  const cloudSaveSequence = useRef(0);
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
 
   useEffect(() => {
     try {
@@ -513,19 +531,12 @@ function LeadershipWorkspace() {
 
     setSourceLoading(true);
     void restoreAndLoadOfficialSource()
-      .then((result) => {
+      .then(async (result) => {
         if (!result) {
           setSourceOpen(true);
           return;
         }
-        setWorkspace((current) =>
-          applyOfficialSource(
-            current,
-            result.members,
-            result.roster,
-            result.sourceMeta,
-          ),
-        );
+        await acceptOfficialSource(result, '正式姓名與會籍已載入', true);
       })
       .catch((error: unknown) => {
         setSourceError(
@@ -535,6 +546,37 @@ function LeadershipWorkspace() {
       })
       .finally(() => setSourceLoading(false));
   }, [hydrated]);
+
+  useEffect(() => {
+    if (
+      !hydrated ||
+      !cloudReady.current ||
+      workspace.sourceMeta?.mode !== 'official'
+    ) {
+      return;
+    }
+    const sequence = ++cloudSaveSequence.current;
+    setCloudSyncStatus('saving');
+    const timer = window.setTimeout(() => {
+      void saveOfficialWorkspace(workspaceForPersistence(workspace))
+        .then(() => {
+          if (sequence === cloudSaveSequence.current) {
+            setCloudSyncStatus('synced');
+          }
+        })
+        .catch((error: unknown) => {
+          if (sequence !== cloudSaveSequence.current) return;
+          setCloudSyncStatus('error');
+          toast.add({
+            title: 'D1 同步失敗',
+            description:
+              error instanceof Error ? error.message : '請稍後重試',
+            type: 'error',
+          });
+        });
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [hydrated, workspace]);
 
   const term = getActiveTerm(workspace);
   const metrics = useMemo(
@@ -547,22 +589,32 @@ function LeadershipWorkspace() {
   );
   const isOfficial = workspace.sourceMeta?.mode === 'official';
 
-  function acceptOfficialSource(result: OfficialSourceResult, message: string) {
-    const normalized = (value: string) => value.replace(/\s+/g, '').trim();
-    const officialNames = new Set(
-      result.members.map((member) => normalized(member.name)),
-    );
-    const matched = result.roster.coreLeaders.filter((leader) =>
-      officialNames.has(normalized(leader.memberName)),
+  async function acceptOfficialSource(
+    result: OfficialSourceResult,
+    message: string,
+    loadCloud = false,
+  ) {
+    setCloudSyncStatus(loadCloud ? 'loading' : 'saving');
+    let baseWorkspace = workspaceRef.current;
+    if (loadCloud) {
+      const cloudWorkspace = await loadOfficialWorkspace();
+      if (cloudWorkspace && isWorkspaceSnapshot(cloudWorkspace)) {
+        baseWorkspace = cloudWorkspace;
+      }
+    }
+    const officialIds = new Set(result.members.map((member) => member.id));
+    const matched = result.roster.coreLeaders.filter(
+      (leader) => leader.memberId && officialIds.has(leader.memberId),
     ).length;
-    setWorkspace((current) =>
-      applyOfficialSource(
-        current,
-        result.members,
-        result.roster,
-        result.sourceMeta,
-      ),
+    const next = applyOfficialSource(
+      baseWorkspace,
+      result.members,
+      result.roster,
+      result.sourceMeta,
     );
+    cloudReady.current = true;
+    workspaceRef.current = next;
+    setWorkspace(next);
     setHistory([]);
     toast.add({
       title: message,
@@ -576,10 +628,10 @@ function LeadershipWorkspace() {
     setSourceError('');
     try {
       const result = await loginAndLoadOfficialSource(
-        sourceAccount,
+        sourceEmail,
         sourcePassword,
       );
-      acceptOfficialSource(result, '正式姓名與會籍已載入');
+      await acceptOfficialSource(result, '正式姓名與會籍已載入', true);
       setSourcePassword('');
       setSourceOpen(false);
     } catch (error) {
@@ -600,7 +652,7 @@ function LeadershipWorkspace() {
         setSourceOpen(true);
         return;
       }
-      acceptOfficialSource(result, '正式資料已重新讀取');
+      await acceptOfficialSource(result, '正式資料已重新讀取');
     } catch (error) {
       setSourceError(
         error instanceof Error ? error.message : '正式資料讀取失敗',
@@ -872,7 +924,7 @@ function LeadershipWorkspace() {
             trainingDate: draftTrainingDate,
           },
         })),
-      '工作台設定已保存（目前為瀏覽器草稿）',
+      isOfficial ? '工作台設定已保存並同步' : '測試設定已保存',
     );
     setSettingsOpen(false);
   }
@@ -1064,7 +1116,10 @@ function LeadershipWorkspace() {
                 <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary font-black text-primary-foreground lg:hidden">
                   富
                 </span>
-                <Select value={term.id} onValueChange={changeTerm}>
+                <Select
+                  value={term.id}
+                  onValueChange={(value) => value && changeTerm(value)}
+                >
                   <SelectTrigger className="h-9 min-w-[108px] bg-card font-bold shadow-sm">
                     <SelectValue>{term.label}</SelectValue>
                   </SelectTrigger>
@@ -1077,8 +1132,21 @@ function LeadershipWorkspace() {
                   </SelectContent>
                 </Select>
                 <span className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
-                  <Check className="size-3.5 text-emerald-600" />
-                  {savedLabel(workspace.lastSavedAt)}
+                  {cloudSyncStatus === 'saving' ||
+                  cloudSyncStatus === 'loading' ? (
+                    <Loader2 className="size-3.5 animate-spin text-sky-600" />
+                  ) : (
+                    <Check
+                      className={`size-3.5 ${
+                        cloudSyncStatus === 'error'
+                          ? 'text-rose-600'
+                          : 'text-emerald-600'
+                      }`}
+                    />
+                  )}
+                  {isOfficial
+                    ? cloudSyncLabel(cloudSyncStatus)
+                    : savedLabel(workspace.lastSavedAt)}
                 </span>
               </div>
 
@@ -1530,30 +1598,14 @@ function LeadershipWorkspace() {
             </DialogHeader>
             <div className="grid gap-3">
               <label className="grid gap-1.5 text-xs font-bold">
-                來源帳號
-                <Select
-                  value={sourceAccount}
-                  onValueChange={(value) =>
-                    setSourceAccount(value as OfficialSourceAccount)
-                  }
-                >
-                  <SelectTrigger className="w-full bg-background">
-                    <SelectValue>
-                      {
-                        OFFICIAL_SOURCE_ACCOUNT_OPTIONS.find(
-                          (item) => item.value === sourceAccount,
-                        )?.label
-                      }
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {OFFICIAL_SOURCE_ACCOUNT_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                來源帳號 Email
+                <Input
+                  type="email"
+                  autoComplete="username"
+                  value={sourceEmail}
+                  onChange={(event) => setSourceEmail(event.target.value)}
+                  placeholder="輸入現有共用帳號"
+                />
               </label>
               <label className="grid gap-1.5 text-xs font-bold">
                 密碼
@@ -1581,7 +1633,7 @@ function LeadershipWorkspace() {
                 稍後再載入
               </Button>
               <Button
-                disabled={sourceLoading || !sourcePassword}
+                disabled={sourceLoading || !sourceEmail || !sourcePassword}
                 onClick={() => void connectOfficialSource()}
               >
                 {sourceLoading ? (
@@ -1607,7 +1659,10 @@ function LeadershipWorkspace() {
             </DialogHeader>
 
             <div className="grid gap-3 sm:grid-cols-[190px_1fr]">
-              <Select value={targetRoleId} onValueChange={setTargetRoleId}>
+              <Select
+                value={targetRoleId}
+                onValueChange={(value) => value && setTargetRoleId(value)}
+              >
                 <SelectTrigger className="h-9 w-full bg-background">
                   <SelectValue>
                     {
@@ -1789,7 +1844,7 @@ function LeadershipWorkspace() {
                             <Select
                               value={item.roleId}
                               onValueChange={(value) =>
-                                moveAssignment(item, value)
+                                value && moveAssignment(item, value)
                               }
                             >
                               <SelectTrigger className="mt-2 h-8 w-full bg-card text-xs">
@@ -2025,10 +2080,18 @@ function LeadershipWorkspace() {
                 </div>
               </section>
 
-              <p className="rounded-xl bg-primary/5 px-3 py-2.5 text-[11px] leading-5 text-muted-foreground">
-                目前只暫存在這個瀏覽器，不會讀取電腦檔案。接上 BNI-PRES
-                獨立資料庫後，手機與電腦才會自動同步；委員會 Supabase
-                仍維持唯讀。
+              <p
+                className={`rounded-xl px-3 py-2.5 text-[11px] font-bold leading-5 ${
+                  cloudSyncStatus === 'error'
+                    ? 'bg-rose-50 text-rose-800'
+                    : isOfficial
+                      ? 'bg-emerald-50 text-emerald-800'
+                      : 'bg-primary/5 text-muted-foreground'
+                }`}
+              >
+                {isOfficial
+                  ? `${cloudSyncLabel(cloudSyncStatus)}・編組、設定與追蹤儲存在 BNI-PRES 獨立 Cloudflare D1；委員會 Supabase 只讀。`
+                  : '登入正式來源後，手機與電腦會透過 BNI-PRES D1 同步。'}
               </p>
             </div>
             <DialogFooter>

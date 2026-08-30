@@ -120,7 +120,7 @@ test('正式唯讀來源會移除示範安排，且備份不保存正式姓名�
     coreLeaders: roleKeys.map((roleKey, index) => ({
       roleKey,
       roleName: `核心職務${index + 1}`,
-      memberName: members[index].name,
+      memberId: members[index].id,
     })),
   };
   const sourceMeta: WorkspaceSourceMeta = {

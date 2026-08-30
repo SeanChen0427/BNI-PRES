@@ -102,7 +102,8 @@ export type OfficialCoreRoster = {
   coreLeaders: Array<{
     roleKey: string;
     roleName: string;
-    memberName: string;
+    memberId?: string;
+    memberName?: string;
   }>;
 };
 
@@ -388,9 +389,18 @@ export function applyOfficialSource(
     .map((leader) => ({
       leader,
       roleId: OFFICIAL_CORE_ROLE_IDS[leader.roleKey],
-      member: memberByName.get(normalizedMemberName(leader.memberName)),
+      member:
+        (leader.memberId
+          ? members.find((member) => member.id === leader.memberId)
+          : undefined) ??
+        (leader.memberName
+          ? memberByName.get(normalizedMemberName(leader.memberName))
+          : undefined),
     }))
     .filter((item) => item.roleId && item.member);
+  const officialCoreRoleIds = new Set(
+    matchedLeaders.map((item) => item.roleId),
+  );
 
   const terms = workspace.terms.map((term) => {
     const retainedAssignments = wasOfficial
@@ -411,7 +421,7 @@ export function applyOfficialSource(
         )
       : {};
 
-    if (term.number !== roster.term.number || wasOfficial) {
+    if (term.number !== roster.term.number) {
       return {
         ...term,
         assignments: retainedAssignments,
@@ -420,6 +430,11 @@ export function applyOfficialSource(
       };
     }
 
+    const retainedNonRosterAssignments = retainedAssignments.filter(
+      (item) =>
+        item.kind !== 'core' || !officialCoreRoleIds.has(item.roleId),
+    );
+
     return {
       ...term,
       label: roster.term.label || term.label,
@@ -427,15 +442,18 @@ export function applyOfficialSource(
       meetingDate: roster.term.meetingDate || term.meetingDate,
       startDate: roster.term.startsOn || term.startDate,
       endDate: roster.term.endsOn || term.endDate,
-      assignments: matchedLeaders.map(({ roleId, member }) => ({
-        id: `official-core-${roleId}`,
-        memberId: member!.id,
-        roleId,
-        kind: 'core' as const,
-        decision: 'confirmed' as const,
-      })),
-      training: {},
-      renewal: {},
+      assignments: [
+        ...retainedNonRosterAssignments,
+        ...matchedLeaders.map(({ roleId, member }) => ({
+          id: `official-core-${roleId}`,
+          memberId: member!.id,
+          roleId,
+          kind: 'core' as const,
+          decision: 'confirmed' as const,
+        })),
+      ],
+      training: retainedTraining,
+      renewal: retainedRenewal,
     };
   });
 
