@@ -15,6 +15,8 @@ import {
   Loader2,
   LogIn,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -474,6 +476,7 @@ function LeadershipWorkspace() {
   const [history, setHistory] = useState<WorkspaceState[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [view, setView] = useState<WorkspaceView>('board');
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(true);
   const [peopleSearch, setPeopleSearch] = useState('');
   const [addOpen, setAddOpen] = useState(false);
   const [addSearch, setAddSearch] = useState('');
@@ -1015,18 +1018,57 @@ function LeadershipWorkspace() {
 
   return (
     <Toaster>
-      <main className="min-h-screen bg-background text-foreground lg:grid lg:grid-cols-[236px_minmax(0,1fr)]">
-        <aside className="hidden min-h-screen bg-sidebar px-5 py-6 text-sidebar-foreground lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col">
-          <div className="flex items-center gap-3 px-2">
+      <main
+        className={`min-h-screen bg-background text-foreground transition-[grid-template-columns] duration-200 lg:grid ${
+          desktopSidebarCollapsed
+            ? 'lg:grid-cols-[72px_minmax(0,1fr)]'
+            : 'lg:grid-cols-[236px_minmax(0,1fr)]'
+        }`}
+      >
+        <aside
+          id="desktop-workspace-sidebar"
+          className={`relative hidden min-h-screen bg-sidebar py-6 text-sidebar-foreground transition-[padding] duration-200 lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col ${
+            desktopSidebarCollapsed ? 'px-3' : 'px-5'
+          }`}
+        >
+          <button
+            type="button"
+            aria-controls="desktop-workspace-sidebar"
+            aria-expanded={!desktopSidebarCollapsed}
+            aria-label={
+              desktopSidebarCollapsed ? '展開左側工作列' : '縮小左側工作列'
+            }
+            title={
+              desktopSidebarCollapsed ? '展開左側工作列' : '縮小左側工作列'
+            }
+            onClick={() =>
+              setDesktopSidebarCollapsed((collapsed) => !collapsed)
+            }
+            className="absolute -right-3 top-8 z-20 grid size-7 place-items-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {desktopSidebarCollapsed ? (
+              <PanelLeftOpen className="size-3.5" />
+            ) : (
+              <PanelLeftClose className="size-3.5" />
+            )}
+          </button>
+
+          <div
+            className={`flex items-center ${
+              desktopSidebarCollapsed ? 'justify-center' : 'gap-3 px-2'
+            }`}
+          >
             <span className="grid size-10 place-items-center rounded-2xl bg-sidebar-primary font-black text-sidebar-primary-foreground shadow-sm">
               富
             </span>
-            <div>
-              <p className="font-semibold tracking-wide">富聯</p>
-              <p className="text-xs text-sidebar-foreground/60">
-                領導團隊工作台
-              </p>
-            </div>
+            {desktopSidebarCollapsed ? null : (
+              <div>
+                <p className="font-semibold tracking-wide">富聯</p>
+                <p className="text-xs text-sidebar-foreground/60">
+                  領導團隊工作台
+                </p>
+              </div>
+            )}
           </div>
 
           <nav className="mt-10 space-y-1" aria-label="主要導覽">
@@ -1039,16 +1081,29 @@ function LeadershipWorkspace() {
                   setView(item.id);
                   setPeopleSearch('');
                 }}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition ${
+                title={desktopSidebarCollapsed ? item.label : undefined}
+                className={`relative flex w-full items-center rounded-xl py-2.5 text-sm transition ${
+                  desktopSidebarCollapsed
+                    ? 'justify-center px-0'
+                    : 'gap-3 px-3 text-left'
+                } ${
                   view === item.id
                     ? 'bg-sidebar-accent text-sidebar-accent-foreground shadow-sm'
                     : 'text-sidebar-foreground/65 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
                 }`}
               >
                 <item.icon className="size-4" />
-                <span>{item.label}</span>
+                <span className={desktopSidebarCollapsed ? 'sr-only' : ''}>
+                  {item.label}
+                </span>
                 {item.id === 'issues' && issues.length ? (
-                  <span className="ml-auto rounded-full bg-amber-300 px-2 py-0.5 text-xs font-semibold text-amber-950">
+                  <span
+                    className={`rounded-full bg-amber-300 font-semibold text-amber-950 ${
+                      desktopSidebarCollapsed
+                        ? 'absolute right-0.5 top-0.5 min-w-4 px-1 text-[9px] leading-4'
+                        : 'ml-auto px-2 py-0.5 text-xs'
+                    }`}
+                  >
                     {issues.length}
                   </span>
                 ) : null}
@@ -1056,67 +1111,52 @@ function LeadershipWorkspace() {
             ))}
           </nav>
 
-          <div className="mt-8 border-t border-sidebar-border/60 pt-6">
-            <p className="px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-sidebar-foreground/40">
-              屆次
-            </p>
-            <div className="mt-2 space-y-1">
-              {workspace.terms.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => changeTerm(item.id)}
-                  className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs font-semibold ${
-                    term.id === item.id
-                      ? 'bg-white/10 text-white'
-                      : 'text-sidebar-foreground/55 hover:bg-white/5 hover:text-white'
-                  }`}
-                >
-                  <span
-                    className={`size-2 rounded-full ${
-                      item.status === 'archived'
-                        ? 'bg-slate-400'
-                        : item.status === 'active'
-                          ? 'bg-emerald-400'
-                          : 'bg-amber-300'
-                    }`}
-                  />
-                  {item.label}
-                  <span className="ml-auto text-[10px] font-medium opacity-50">
-                    {item.status === 'planning' ? '規劃中' : item.status}
-                  </span>
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={addNextTerm}
-              className="mt-2 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold text-amber-200 hover:bg-white/5"
-            >
-              <Plus className="size-3.5" />
-              建立下一屆
-            </button>
-          </div>
-
-          <div className="mt-auto space-y-3">
-            <div className="rounded-2xl border border-sidebar-border bg-white/5 p-4">
-              <div
-                className={`flex items-center gap-2 text-xs font-semibold ${
-                  isOfficial ? 'text-emerald-200' : 'text-amber-200'
-                }`}
-              >
-                {isOfficial ? (
-                  <ShieldCheck className="size-3.5" />
-                ) : (
-                  <Sparkles className="size-3.5" />
-                )}
-                {isOfficial ? '共同工作台已連線' : '工作台尚未登入'}
-              </div>
-              <p className="mt-2 text-xs leading-5 text-sidebar-foreground/60">
-                {isOfficial
-                  ? `會員主檔 ${workspace.sourceMeta?.memberCount ?? workspace.members.length} 位；所有裝置共用同一份 D1 進度。`
-                  : '輸入共用密碼後，會自動載入正式名單與雲端進度。'}
+          {desktopSidebarCollapsed ? null : (
+            <div className="mt-8 border-t border-sidebar-border/60 pt-6">
+              <p className="px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-sidebar-foreground/40">
+                屆次
               </p>
+              <div className="mt-2 space-y-1">
+                {workspace.terms.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => changeTerm(item.id)}
+                    className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs font-semibold ${
+                      term.id === item.id
+                        ? 'bg-white/10 text-white'
+                        : 'text-sidebar-foreground/55 hover:bg-white/5 hover:text-white'
+                    }`}
+                  >
+                    <span
+                      className={`size-2 rounded-full ${
+                        item.status === 'archived'
+                          ? 'bg-slate-400'
+                          : item.status === 'active'
+                            ? 'bg-emerald-400'
+                            : 'bg-amber-300'
+                      }`}
+                    />
+                    {item.label}
+                    <span className="ml-auto text-[10px] font-medium opacity-50">
+                      {item.status === 'planning' ? '規劃中' : item.status}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={addNextTerm}
+                className="mt-2 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold text-amber-200 hover:bg-white/5"
+              >
+                <Plus className="size-3.5" />
+                建立下一屆
+              </button>
+            </div>
+          )}
+
+          {desktopSidebarCollapsed ? (
+            <div className="mt-auto flex flex-col items-center gap-2">
               <button
                 type="button"
                 onClick={() =>
@@ -1124,27 +1164,79 @@ function LeadershipWorkspace() {
                     ? setDirectoryImportOpen(true)
                     : setSourceOpen(true)
                 }
-                className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/85 hover:text-white"
+                aria-label={isOfficial ? '更新會員資料' : '登入共同工作台'}
+                title={isOfficial ? '更新會員資料' : '登入共同工作台'}
+                className={`grid size-10 place-items-center rounded-xl border border-sidebar-border transition hover:bg-white/5 ${
+                  isOfficial ? 'text-emerald-200' : 'text-amber-200'
+                }`}
               >
                 {sourceLoading ? (
-                  <Loader2 className="size-3 animate-spin" />
+                  <Loader2 className="size-4 animate-spin" />
                 ) : isOfficial ? (
-                  <RefreshCw className="size-3" />
+                  <ShieldCheck className="size-4" />
                 ) : (
-                  <LogIn className="size-3" />
+                  <LogIn className="size-4" />
                 )}
-                {isOfficial ? '更新會員資料' : '登入共同工作台'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setBackupOpen(true)}
+                aria-label="備份與還原"
+                title="備份與還原"
+                className="grid size-10 place-items-center rounded-xl border border-sidebar-border text-sidebar-foreground/75 transition hover:bg-white/5 hover:text-white"
+              >
+                <Database className="size-4" />
               </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setBackupOpen(true)}
-              className="flex w-full items-center justify-center gap-2 rounded-xl border border-sidebar-border py-2.5 text-xs font-bold text-sidebar-foreground/75 hover:bg-white/5 hover:text-white"
-            >
-              <Database className="size-3.5" />
-              備份與還原
-            </button>
-          </div>
+          ) : (
+            <div className="mt-auto space-y-3">
+              <div className="rounded-2xl border border-sidebar-border bg-white/5 p-4">
+                <div
+                  className={`flex items-center gap-2 text-xs font-semibold ${
+                    isOfficial ? 'text-emerald-200' : 'text-amber-200'
+                  }`}
+                >
+                  {isOfficial ? (
+                    <ShieldCheck className="size-3.5" />
+                  ) : (
+                    <Sparkles className="size-3.5" />
+                  )}
+                  {isOfficial ? '共同工作台已連線' : '工作台尚未登入'}
+                </div>
+                <p className="mt-2 text-xs leading-5 text-sidebar-foreground/60">
+                  {isOfficial
+                    ? `會員主檔 ${workspace.sourceMeta?.memberCount ?? workspace.members.length} 位；所有裝置共用同一份 D1 進度。`
+                    : '輸入共用密碼後，會自動載入正式名單與雲端進度。'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    isOfficial
+                      ? setDirectoryImportOpen(true)
+                      : setSourceOpen(true)
+                  }
+                  className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/85 hover:text-white"
+                >
+                  {sourceLoading ? (
+                    <Loader2 className="size-3 animate-spin" />
+                  ) : isOfficial ? (
+                    <RefreshCw className="size-3" />
+                  ) : (
+                    <LogIn className="size-3" />
+                  )}
+                  {isOfficial ? '更新會員資料' : '登入共同工作台'}
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBackupOpen(true)}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-sidebar-border py-2.5 text-xs font-bold text-sidebar-foreground/75 hover:bg-white/5 hover:text-white"
+              >
+                <Database className="size-3.5" />
+                備份與還原
+              </button>
+            </div>
+          )}
         </aside>
 
         <section className="min-w-0 pb-20 lg:pb-0">
