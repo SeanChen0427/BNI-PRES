@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   WORKSPACE_SCHEMA,
+  applyOfficialSource,
   createDemoWorkspace,
   createNextTerm,
   getActiveTerm,
@@ -10,6 +11,10 @@ import {
   getTermMetrics,
   isWorkspaceSnapshot,
   memberNeedsRenewal,
+  workspaceForPersistence,
+  type Member,
+  type OfficialCoreRoster,
+  type WorkspaceSourceMeta,
 } from './leadership.ts';
 
 test('示範資料可一致計算職位、缺額與問題', () => {
@@ -81,4 +86,74 @@ test('只接受目前版本且 active term 存在的備份', () => {
     false,
   );
   assert.equal(workspace.schema, WORKSPACE_SCHEMA);
+});
+
+test('正式唯讀來源會移除示範安排，且備份不保存正式姓名與會籍', () => {
+  const workspace = createDemoWorkspace();
+  const roleKeys = [
+    'chair',
+    'vice-chair',
+    'secretary-treasurer',
+    'visitor-host',
+    'education',
+    'events',
+    'mentoring',
+    'growth',
+  ];
+  const members: Member[] = roleKeys.map((_, index) => ({
+    id: `official-id-${index + 1}`,
+    name: `正式測試會員${index + 1}`,
+    profession: `測試專業${index + 1}`,
+    expiryDate: `2027-${String(index + 1).padStart(2, '0')}-28`,
+    status: 'active',
+    source: 'official-read-only',
+  }));
+  const roster: OfficialCoreRoster = {
+    term: {
+      number: 11,
+      label: '第 11 屆',
+      status: 'planning',
+      meetingDate: '2026-08-31',
+      startsOn: '',
+      endsOn: '',
+    },
+    coreLeaders: roleKeys.map((roleKey, index) => ({
+      roleKey,
+      roleName: `核心職務${index + 1}`,
+      memberName: members[index].name,
+    })),
+  };
+  const sourceMeta: WorkspaceSourceMeta = {
+    mode: 'official',
+    adapter: 'supabase-members-read-only',
+    loadedAt: '2026-08-30T01:00:00.000Z',
+    memberCount: members.length,
+    missingExpiryCount: 0,
+    memberMasterUpdatedAt: '2026-08-30T00:00:00.000Z',
+    snapshotPeriodEnd: '2026-07-31',
+    snapshotGeneratedAt: '2026-08-01T00:00:00.000Z',
+    snapshotFingerprint: 'fixture-only',
+    snapshotMemberCount: members.length,
+    reconciliation: 'matched',
+    coreRosterExpected: 0,
+    coreRosterMatched: 0,
+  };
+
+  const official = applyOfficialSource(workspace, members, roster, sourceMeta);
+  const term = getActiveTerm(official);
+
+  assert.equal(term.assignments.length, 8);
+  assert.equal(
+    term.assignments.every((item) => item.kind === 'core'),
+    true,
+  );
+  assert.equal(official.sourceMeta?.coreRosterMatched, 8);
+  assert.equal(
+    official.members.every((member) => member.source === 'official-read-only'),
+    true,
+  );
+
+  const persisted = workspaceForPersistence(official);
+  assert.deepEqual(persisted.members, []);
+  assert.equal(JSON.stringify(persisted).includes('正式測試會員1'), false);
 });

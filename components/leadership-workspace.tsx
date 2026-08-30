@@ -15,10 +15,14 @@ import {
   FileUp,
   GraduationCap,
   LayoutDashboard,
+  Loader2,
+  LogIn,
   Plus,
+  RefreshCw,
   RotateCcw,
   Search,
   Settings2,
+  ShieldCheck,
   Sparkles,
   Trash2,
   UserRound,
@@ -48,6 +52,7 @@ import {
 import { Toaster, toast } from '@/components/ui/toast';
 import {
   STORAGE_KEY,
+  applyOfficialSource,
   cloneWorkspace,
   createDemoWorkspace,
   createNextTerm,
@@ -63,6 +68,7 @@ import {
   makeAssignmentId,
   memberNeedsRenewal,
   renewalStatusLabel,
+  workspaceForPersistence,
   type Assignment,
   type DecisionStatus,
   type Member,
@@ -72,6 +78,14 @@ import {
   type WorkspaceIssue,
   type WorkspaceState,
 } from '@/lib/leadership';
+import {
+  OFFICIAL_SOURCE_ACCOUNT_OPTIONS,
+  hasOfficialSourceSession,
+  loginAndLoadOfficialSource,
+  restoreAndLoadOfficialSource,
+  type OfficialSourceAccount,
+  type OfficialSourceResult,
+} from '@/lib/official-source';
 
 type WorkspaceView = 'board' | 'people' | 'issues';
 
@@ -287,17 +301,6 @@ function TeamCard({
             <p className="text-xs font-bold">
               {groupAssignments.length} / {group.capacity}
             </p>
-            <div className="mt-2 h-1.5 w-16 overflow-hidden rounded-full bg-muted">
-              <span
-                className={`block h-full rounded-full ${visual.accent}`}
-                style={{
-                  width: `${Math.min(
-                    100,
-                    (groupAssignments.length / group.capacity) * 100,
-                  )}%`,
-                }}
-              />
-            </div>
           </div>
         </div>
 
@@ -470,7 +473,14 @@ function LeadershipWorkspace() {
   const [backupOpen, setBackupOpen] = useState(false);
   const [draftRenewalThreshold, setDraftRenewalThreshold] = useState('');
   const [draftTrainingDate, setDraftTrainingDate] = useState('');
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const [sourceAccount, setSourceAccount] =
+    useState<OfficialSourceAccount>('vice');
+  const [sourcePassword, setSourcePassword] = useState('');
+  const [sourceLoading, setSourceLoading] = useState(false);
+  const [sourceError, setSourceError] = useState('');
   const importInputRef = useRef<HTMLInputElement>(null);
+  const sourceRestoreStarted = useRef(false);
 
   useEffect(() => {
     try {
@@ -488,8 +498,44 @@ function LeadershipWorkspace() {
 
   useEffect(() => {
     if (!hydrated) return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace));
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(workspaceForPersistence(workspace)),
+    );
   }, [hydrated, workspace]);
+
+  useEffect(() => {
+    if (!hydrated || sourceRestoreStarted.current) return;
+    sourceRestoreStarted.current = true;
+    if (!hasOfficialSourceSession()) {
+      setSourceOpen(true);
+      return;
+    }
+
+    setSourceLoading(true);
+    void restoreAndLoadOfficialSource()
+      .then((result) => {
+        if (!result) {
+          setSourceOpen(true);
+          return;
+        }
+        setWorkspace((current) =>
+          applyOfficialSource(
+            current,
+            result.members,
+            result.roster,
+            result.sourceMeta,
+          ),
+        );
+      })
+      .catch((error: unknown) => {
+        setSourceError(
+          error instanceof Error ? error.message : '正式資料讀取失敗',
+        );
+        setSourceOpen(true);
+      })
+      .finally(() => setSourceLoading(false));
+  }, [hydrated]);
 
   const term = getActiveTerm(workspace);
   const metrics = useMemo(
@@ -500,6 +546,71 @@ function LeadershipWorkspace() {
     () => getTermIssues(workspace, term),
     [workspace, term],
   );
+  const isOfficial = workspace.sourceMeta?.mode === 'official';
+
+  function acceptOfficialSource(result: OfficialSourceResult, message: string) {
+    const normalized = (value: string) => value.replace(/\s+/g, '').trim();
+    const officialNames = new Set(
+      result.members.map((member) => normalized(member.name)),
+    );
+    const matched = result.roster.coreLeaders.filter((leader) =>
+      officialNames.has(normalized(leader.memberName)),
+    ).length;
+    setWorkspace((current) =>
+      applyOfficialSource(
+        current,
+        result.members,
+        result.roster,
+        result.sourceMeta,
+      ),
+    );
+    setHistory([]);
+    toast.add({
+      title: message,
+      description: `${result.members.length} 位現任會員・8 長對上 ${matched}/8 位`,
+      type: matched === 8 ? 'success' : 'warning',
+    });
+  }
+
+  async function connectOfficialSource() {
+    setSourceLoading(true);
+    setSourceError('');
+    try {
+      const result = await loginAndLoadOfficialSource(
+        sourceAccount,
+        sourcePassword,
+      );
+      acceptOfficialSource(result, '正式姓名與會籍已載入');
+      setSourcePassword('');
+      setSourceOpen(false);
+    } catch (error) {
+      setSourceError(
+        error instanceof Error ? error.message : '正式資料讀取失敗',
+      );
+    } finally {
+      setSourceLoading(false);
+    }
+  }
+
+  async function refreshOfficialSource() {
+    setSourceLoading(true);
+    setSourceError('');
+    try {
+      const result = await restoreAndLoadOfficialSource();
+      if (!result) {
+        setSourceOpen(true);
+        return;
+      }
+      acceptOfficialSource(result, '正式資料已重新讀取');
+    } catch (error) {
+      setSourceError(
+        error instanceof Error ? error.message : '正式資料讀取失敗',
+      );
+      setSourceOpen(true);
+    } finally {
+      setSourceLoading(false);
+    }
+  }
 
   const roleOptions = useMemo(
     () => [
@@ -768,16 +879,23 @@ function LeadershipWorkspace() {
   }
 
   function exportBackup() {
-    const blob = new Blob([JSON.stringify(workspace, null, 2)], {
+    const exportWorkspace = workspaceForPersistence(workspace);
+    const blob = new Blob([JSON.stringify(exportWorkspace, null, 2)], {
       type: 'application/json',
     });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `fulian-leadership-demo-term-${term.number}.json`;
+    link.download = `fulian-leadership-work-term-${term.number}.json`;
     link.click();
     URL.revokeObjectURL(url);
-    toast.add({ title: '虛構資料備份已匯出', type: 'success' });
+    toast.add({
+      title: '工作資料備份已匯出',
+      description: isOfficial
+        ? '正式姓名與會籍未寫入備份，還原後重新連接來源即可。'
+        : undefined,
+      type: 'success',
+    });
   }
 
   async function importBackup(event: ChangeEvent<HTMLInputElement>) {
@@ -893,14 +1011,41 @@ function LeadershipWorkspace() {
 
           <div className="mt-auto space-y-3">
             <div className="rounded-2xl border border-sidebar-border bg-white/5 p-4">
-              <div className="flex items-center gap-2 text-xs font-semibold text-amber-200">
-                <Sparkles className="size-3.5" />
-                虛構資料模式
+              <div
+                className={`flex items-center gap-2 text-xs font-semibold ${
+                  isOfficial ? 'text-emerald-200' : 'text-amber-200'
+                }`}
+              >
+                {isOfficial ? (
+                  <ShieldCheck className="size-3.5" />
+                ) : (
+                  <Sparkles className="size-3.5" />
+                )}
+                {isOfficial ? '正式唯讀資料' : '虛構資料模式'}
               </div>
               <p className="mt-2 text-xs leading-5 text-sidebar-foreground/60">
-                Demo adapter，共 {workspace.members.length}{' '}
-                位測試會員；不含真實姓名或會籍資料。
+                {isOfficial
+                  ? `會員主檔 ${workspace.sourceMeta?.memberCount ?? workspace.members.length} 位；會籍資料只在登入期間讀取。`
+                  : `Demo adapter，共 ${workspace.members.length} 位測試會員。`}
               </p>
+              <button
+                type="button"
+                onClick={() =>
+                  isOfficial
+                    ? void refreshOfficialSource()
+                    : setSourceOpen(true)
+                }
+                className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/85 hover:text-white"
+              >
+                {sourceLoading ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : isOfficial ? (
+                  <RefreshCw className="size-3" />
+                ) : (
+                  <LogIn className="size-3" />
+                )}
+                {isOfficial ? '重新讀取' : '載入正式資料'}
+              </button>
             </div>
             <button
               type="button"
@@ -1053,6 +1198,66 @@ function LeadershipWorkspace() {
               </div>
             </div>
 
+            <div
+              className={`mt-6 flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center ${
+                isOfficial
+                  ? workspace.sourceMeta?.reconciliation === 'mismatch'
+                    ? 'border-rose-200 bg-rose-50 text-rose-950'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-950'
+                  : 'border-amber-200 bg-amber-50 text-amber-950'
+              }`}
+            >
+              <span
+                className={`grid size-9 shrink-0 place-items-center rounded-xl ${
+                  isOfficial
+                    ? workspace.sourceMeta?.reconciliation === 'mismatch'
+                      ? 'bg-rose-200'
+                      : 'bg-emerald-200'
+                    : 'bg-amber-200'
+                }`}
+              >
+                {isOfficial ? (
+                  <ShieldCheck className="size-4" />
+                ) : (
+                  <Database className="size-4" />
+                )}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-black">
+                  {isOfficial
+                    ? workspace.sourceMeta?.reconciliation === 'mismatch'
+                      ? '正式主檔已載入，但分析快照人數不一致'
+                      : '正式姓名與會籍已從會員主檔載入'
+                    : '目前仍顯示虛構測試資料'}
+                </p>
+                <p className="mt-1 text-xs leading-5 opacity-75">
+                  {isOfficial
+                    ? `現任會員 ${workspace.sourceMeta?.memberCount ?? workspace.members.length} 位・會籍缺值 ${workspace.sourceMeta?.missingExpiryCount ?? 0} 位・8 長對上 ${workspace.sourceMeta?.coreRosterMatched ?? 0}/${workspace.sourceMeta?.coreRosterExpected ?? 8} 位；分析快照 ${workspace.sourceMeta?.snapshotPeriodEnd ? shortDate(workspace.sourceMeta.snapshotPeriodEnd) : '尚無日期'}／${workspace.sourceMeta?.snapshotMemberCount ?? '未提供'} 人。`
+                    : '登入既有副主席系統後，會直接讀取 Supabase 正式會員主檔與已發布快照；密碼不會保存。'}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={sourceLoading}
+                className="bg-white/75"
+                onClick={() =>
+                  isOfficial
+                    ? void refreshOfficialSource()
+                    : setSourceOpen(true)
+                }
+              >
+                {sourceLoading ? (
+                  <Loader2 className="animate-spin" data-icon="inline-start" />
+                ) : isOfficial ? (
+                  <RefreshCw data-icon="inline-start" />
+                ) : (
+                  <LogIn data-icon="inline-start" />
+                )}
+                {isOfficial ? '重新讀取' : '載入正式資料'}
+              </Button>
+            </div>
+
             {view === 'board' ? (
               <>
                 <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50/80 p-4 text-amber-950 sm:flex-row sm:items-center">
@@ -1172,11 +1377,19 @@ function LeadershipWorkspace() {
 
                       <div className="mt-5 border-t border-white/15 pt-4">
                         <div className="flex items-center gap-2 text-[11px] font-bold text-emerald-200">
-                          <Database className="size-3.5" />
-                          Demo adapter 已連線
+                          {isOfficial ? (
+                            <ShieldCheck className="size-3.5" />
+                          ) : (
+                            <Database className="size-3.5" />
+                          )}
+                          {isOfficial
+                            ? '正式會員主檔唯讀連線'
+                            : 'Demo adapter 已連線'}
                         </div>
                         <p className="mt-1.5 text-[10px] leading-4 text-primary-foreground/55">
-                          使用版本化虛構資料；正式會員串接仍未啟用。
+                          {isOfficial
+                            ? `本次載入 ${workspace.sourceMeta?.memberCount ?? workspace.members.length} 位；姓名與會籍不寫入 Git 或本機備份。`
+                            : '使用版本化虛構資料；可由上方載入正式來源。'}
                         </p>
                       </div>
                     </section>
@@ -1294,7 +1507,7 @@ function LeadershipWorkspace() {
                     <p className="mt-1 text-xs text-muted-foreground">
                       {assignedPeople.length
                         ? '試著清除搜尋條件。'
-                        : '新屆次只複製職務結構，請從虛構會員名單開始安排。'}
+                        : `新屆次只複製職務結構，請從${isOfficial ? '正式' : '虛構'}會員名單開始安排。`}
                     </p>
                     {!assignedPeople.length ? (
                       <Button
@@ -1381,10 +1594,87 @@ function LeadershipWorkspace() {
           </div>
         </section>
 
+        <Dialog open={sourceOpen} onOpenChange={setSourceOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>載入正式姓名與會籍</DialogTitle>
+              <DialogDescription>
+                使用既有副主席系統帳密登入。只會唯讀現任會員主檔與已發布快照，密碼不保存。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-3">
+              <label className="grid gap-1.5 text-xs font-bold">
+                來源帳號
+                <Select
+                  value={sourceAccount}
+                  onValueChange={(value) =>
+                    setSourceAccount(value as OfficialSourceAccount)
+                  }
+                >
+                  <SelectTrigger className="w-full bg-background">
+                    <SelectValue>
+                      {
+                        OFFICIAL_SOURCE_ACCOUNT_OPTIONS.find(
+                          (item) => item.value === sourceAccount,
+                        )?.label
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {OFFICIAL_SOURCE_ACCOUNT_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="grid gap-1.5 text-xs font-bold">
+                密碼
+                <Input
+                  type="password"
+                  autoComplete="current-password"
+                  value={sourcePassword}
+                  onChange={(event) => setSourcePassword(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !sourceLoading) {
+                      void connectOfficialSource();
+                    }
+                  }}
+                  placeholder="輸入現有共用密碼"
+                />
+              </label>
+              {sourceError ? (
+                <div className="rounded-xl bg-rose-50 px-3 py-2.5 text-xs font-bold text-rose-800">
+                  {sourceError}
+                </div>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setSourceOpen(false)}>
+                稍後再載入
+              </Button>
+              <Button
+                disabled={sourceLoading || !sourcePassword}
+                onClick={() => void connectOfficialSource()}
+              >
+                {sourceLoading ? (
+                  <Loader2 className="animate-spin" data-icon="inline-start" />
+                ) : (
+                  <LogIn data-icon="inline-start" />
+                )}
+                讀取正式資料
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         <Dialog open={addOpen} onOpenChange={setAddOpen}>
           <DialogContent className="sm:max-w-lg">
             <DialogHeader>
-              <DialogTitle>從虛構會員名單加入人選</DialogTitle>
+              <DialogTitle>
+                從{isOfficial ? '正式' : '虛構'}會員名單加入人選
+              </DialogTitle>
               <DialogDescription>
                 選擇職位後加入；新安排預設為「會議暫定」，並立即重算所有警示。
               </DialogDescription>
@@ -1458,7 +1748,7 @@ function LeadershipWorkspace() {
               })}
               {!candidateMembers.length ? (
                 <div className="rounded-xl border border-dashed border-input px-4 py-10 text-center text-xs text-muted-foreground">
-                  找不到可加入的測試會員
+                  找不到可加入的{isOfficial ? '正式會員' : '測試會員'}
                 </div>
               ) : null}
             </div>
@@ -1478,7 +1768,10 @@ function LeadershipWorkspace() {
                     <div>
                       <DialogTitle>{selectedMember.name}</DialogTitle>
                       <DialogDescription className="mt-1">
-                        {selectedMember.profession}・Demo ID {selectedMember.id}
+                        {selectedMember.profession}・
+                        {selectedMember.source === 'official-read-only'
+                          ? '正式會員主檔（唯讀）'
+                          : `Demo ID ${selectedMember.id}`}
                       </DialogDescription>
                     </div>
                   </div>
@@ -1679,7 +1972,7 @@ function LeadershipWorkspace() {
             <DialogHeader>
               <DialogTitle>備份與還原</DialogTitle>
               <DialogDescription>
-                匯出目前所有屆次、安排與追蹤狀態；第一版檔案只包含虛構資料。
+                匯出目前所有屆次、安排與追蹤狀態；正式姓名與會籍不會寫入備份。
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-3 sm:grid-cols-2">

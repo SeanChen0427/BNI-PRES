@@ -15,7 +15,23 @@ export type Member = {
   profession: string;
   expiryDate: string;
   status: 'active';
-  source: 'demo-adapter';
+  source: 'demo-adapter' | 'official-read-only';
+};
+
+export type WorkspaceSourceMeta = {
+  mode: 'demo' | 'official';
+  adapter: 'demo-adapter' | 'supabase-members-read-only';
+  loadedAt: string | null;
+  memberCount: number;
+  missingExpiryCount: number;
+  memberMasterUpdatedAt: string | null;
+  snapshotPeriodEnd: string | null;
+  snapshotGeneratedAt: string | null;
+  snapshotFingerprint: string | null;
+  snapshotMemberCount: number | null;
+  reconciliation: 'matched' | 'mismatch' | 'unavailable';
+  coreRosterExpected: number;
+  coreRosterMatched: number;
 };
 
 export type CoreRole = {
@@ -71,6 +87,23 @@ export type WorkspaceState = {
   members: Member[];
   terms: TermState[];
   lastSavedAt: string | null;
+  sourceMeta?: WorkspaceSourceMeta;
+};
+
+export type OfficialCoreRoster = {
+  term: {
+    number: number;
+    label: string;
+    status: TermStatus;
+    meetingDate: string;
+    startsOn: string;
+    endsOn: string;
+  };
+  coreLeaders: Array<{
+    roleKey: string;
+    roleName: string;
+    memberName: string;
+  }>;
 };
 
 export type WorkspaceIssue = {
@@ -307,7 +340,124 @@ export function createDemoWorkspace(): WorkspaceState {
     members: cloneStructure(DEMO_MEMBERS),
     terms: [term],
     lastSavedAt: null,
+    sourceMeta: {
+      mode: 'demo',
+      adapter: 'demo-adapter',
+      loadedAt: null,
+      memberCount: DEMO_MEMBERS.length,
+      missingExpiryCount: 0,
+      memberMasterUpdatedAt: null,
+      snapshotPeriodEnd: null,
+      snapshotGeneratedAt: null,
+      snapshotFingerprint: null,
+      snapshotMemberCount: null,
+      reconciliation: 'unavailable',
+      coreRosterExpected: 0,
+      coreRosterMatched: 0,
+    },
   };
+}
+
+const OFFICIAL_CORE_ROLE_IDS: Record<string, string> = {
+  chair: 'core-chair',
+  'vice-chair': 'core-vice-chair',
+  'secretary-treasurer': 'core-secretary-treasurer',
+  'visitor-host': 'core-reception',
+  education: 'core-training',
+  events: 'core-events',
+  mentoring: 'core-mentor',
+  growth: 'core-growth',
+};
+
+function normalizedMemberName(value: string): string {
+  return value.replace(/\s+/g, '').trim();
+}
+
+export function applyOfficialSource(
+  workspace: WorkspaceState,
+  members: Member[],
+  roster: OfficialCoreRoster,
+  sourceMeta: WorkspaceSourceMeta,
+): WorkspaceState {
+  const wasOfficial = workspace.sourceMeta?.mode === 'official';
+  const memberIds = new Set(members.map((member) => member.id));
+  const memberByName = new Map(
+    members.map((member) => [normalizedMemberName(member.name), member]),
+  );
+  const matchedLeaders = roster.coreLeaders
+    .map((leader) => ({
+      leader,
+      roleId: OFFICIAL_CORE_ROLE_IDS[leader.roleKey],
+      member: memberByName.get(normalizedMemberName(leader.memberName)),
+    }))
+    .filter((item) => item.roleId && item.member);
+
+  const terms = workspace.terms.map((term) => {
+    const retainedAssignments = wasOfficial
+      ? term.assignments.filter((item) => memberIds.has(item.memberId))
+      : [];
+    const retainedTraining = wasOfficial
+      ? Object.fromEntries(
+          Object.entries(term.training).filter(([memberId]) =>
+            memberIds.has(memberId),
+          ),
+        )
+      : {};
+    const retainedRenewal = wasOfficial
+      ? Object.fromEntries(
+          Object.entries(term.renewal).filter(([memberId]) =>
+            memberIds.has(memberId),
+          ),
+        )
+      : {};
+
+    if (term.number !== roster.term.number || wasOfficial) {
+      return {
+        ...term,
+        assignments: retainedAssignments,
+        training: retainedTraining,
+        renewal: retainedRenewal,
+      };
+    }
+
+    return {
+      ...term,
+      label: roster.term.label || term.label,
+      status: roster.term.status || term.status,
+      meetingDate: roster.term.meetingDate || term.meetingDate,
+      startDate: roster.term.startsOn || term.startDate,
+      endDate: roster.term.endsOn || term.endDate,
+      assignments: matchedLeaders.map(({ roleId, member }) => ({
+        id: `official-core-${roleId}`,
+        memberId: member!.id,
+        roleId,
+        kind: 'core' as const,
+        decision: 'confirmed' as const,
+      })),
+      training: {},
+      renewal: {},
+    };
+  });
+
+  return {
+    ...workspace,
+    members: cloneStructure(members),
+    terms,
+    lastSavedAt: new Date().toISOString(),
+    sourceMeta: {
+      ...sourceMeta,
+      coreRosterExpected: roster.coreLeaders.length,
+      coreRosterMatched: matchedLeaders.length,
+    },
+  };
+}
+
+export function workspaceForPersistence(
+  workspace: WorkspaceState,
+): WorkspaceState {
+  const snapshot = cloneWorkspace(workspace);
+  if (snapshot.sourceMeta?.mode === 'official') snapshot.members = [];
+  return snapshot;
 }
 
 export function getActiveTerm(workspace: WorkspaceState): TermState {
